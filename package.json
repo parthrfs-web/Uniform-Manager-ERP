@@ -1,0 +1,42 @@
+{
+  "name": "uniform-manager",
+  "version": "1.0.0",
+  "description": "Simple offline Windows desktop demo for uniform distribution and salary deduction review.",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --win --dir",
+    "dist": "electron-builder --win",
+    "test": "node scripts/smoke-test.js",
+    "check-import": "node scripts/check-import.js"
+  },
+  "keywords": [
+    "uniform",
+    "desktop"
+  ],
+  "author": "",
+  "license": "ISC",
+  "build": {
+    "appId": "com.uniformmanager.desktop",
+    "productName": "Uniform Manager",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  },
+  "devDependencies": {
+    "electron": "^43.0.0",
+    "electron-builder": "^26.15.3",
+    "xlsx": "^0.18.5"
+  },
+  "dependencies": {
+    "sql.js": "^1.14.1"
+  }
+}

@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Uniform Manager</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">UM</div>
+        <div>
+          <h1>Uniform Manager</h1>
+          <p>Offline Desktop</p>
+        </div>
+      </div>
+      <nav>
+        <button class="nav-button active" data-view="dashboard">Dashboard</button>
+        <button class="nav-button" data-view="import">Import Excel</button>
+        <button class="nav-button" data-view="employees">Employees</button>
+        <button class="nav-button" data-view="issues">Distribution Register</button>
+        <button class="nav-button" data-view="policies">Unit Entitlements</button>
+        <button class="nav-button" data-view="review">Review Queue</button>
+        <button class="nav-button" data-view="deductions">Salary Deductions</button>
+        <button class="nav-button danger-nav" data-view="reset">Reset Data</button>
+      </nav>
+      <div class="db-box">
+        <span>Local database</span>
+        <strong id="dbPath">Loading...</strong>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <h2 id="viewTitle">Dashboard</h2>
+          <p id="viewSubtitle">Import employee master data and keep it locally on this PC.</p>
+        </div>
+        <div class="actions">
+          <button id="importBtn" class="primary">Import Excel</button>
+        </div>
+      </header>
+
+      <section class="view active" id="dashboard">
+        <div id="importError" class="error-panel"></div>
+        <div class="stats">
+          <article><span>Employees</span><strong id="employeeCount">0</strong></article>
+          <article><span>Distribution Rows</span><strong id="issueCount">0</strong></article>
+          <article><span>Pending Reviews</span><strong id="reviewCount">0</strong></article>
+          <article><span>Total Deduction Amount</span><strong id="deductionTotal">Rs. 0.00</strong></article>
+        </div>
+        <div class="panel">
+          <h3>Latest Import Result</h3>
+          <div id="lastImport" class="empty">No workbook imported yet.</div>
+        </div>
+        <div class="panel">
+          <h3>Pending Review Queue</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Code</th><th>Name</th><th>Unit</th><th>Reason</th><th>Status</th></tr></thead>
+              <tbody id="dashboardReviews"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="import">
+        <div class="panel">
+          <h3>Import Excel</h3>
+          <p class="empty">Choose a monthly Excel workbook. The app will inspect all sheets and show detected columns before anything is imported.</p>
+          <button id="goImportBtn" class="primary" type="button">Choose Excel Workbook</button>
+        </div>
+      </section>
+
+      <section class="view" id="items">
+        <form id="itemForm" class="item-form">
+          <input name="id" type="hidden" />
+          <input name="item_code" placeholder="Item code" required />
+          <input name="item_name" placeholder="Item name" required />
+          <input name="category" placeholder="Category" />
+          <input name="size" placeholder="Size" />
+          <input name="cost" type="number" min="0" step="0.01" placeholder="Cost" />
+          <input name="available_stock" type="number" step="0.01" placeholder="Available stock" />
+          <input name="minimum_stock" type="number" min="0" step="0.01" placeholder="Minimum stock" />
+          <input name="status" placeholder="Status" value="Active" />
+          <button id="saveItemBtn" class="primary" type="submit">Save Item</button>
+          <button id="cancelItemEditBtn" class="secondary" type="button">Clear</button>
+        </form>
+        <div class="panel flush">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Code</th><th>Item</th><th>Category</th><th>Size</th><th>Cost</th><th>Stock</th><th>Min</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody id="itemRows"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>Recent Stock Movements</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Item</th><th>Type</th><th>Qty</th><th>Reference</th><th>Notes</th><th>Date</th></tr></thead>
+              <tbody id="movementRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="issues">
+        <div class="mini-stats">
+          <article><span>Shown Rows</span><strong id="distributionVisibleCount">0</strong><small>employee/month rows</small></article>
+          <article><span>Issued Entries</span><strong id="distributionEntryCount">0</strong><small>positive item quantities</small></article>
+          <article><span>Item Columns</span><strong id="distributionItemCount">0</strong><small>uniform item types</small></article>
+        </div>
+        <div class="panel">
+          <div class="panel-title-row">
+            <h3>Employee Distribution Register</h3>
+            <div class="row-actions">
+              <button id="loadMoreDistributionBtn" type="button">Load More</button>
+              <button id="loadAllDistributionBtn" type="button">Load All</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table id="issueMatrixTable">
+              <thead id="issueMatrixHead"></thead>
+              <tbody id="issueSummaryRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="employees">
+        <div class="toolbar">
+          <input id="employeeSearch" placeholder="Search code, name, unit, godown or mobile" />
+        </div>
+        <div class="panel flush">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Employee Code</th><th>Name</th><th>Father Name</th><th>Unit</th><th>Godown</th><th>Mobile</th><th>Designation</th><th>Status</th><th>Actions</th></tr>
+              </thead>
+              <tbody id="employeeRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="reset">
+        <div class="panel danger-zone">
+          <h3>Reset Imported Data</h3>
+          <p>This clears imported employees, distribution register rows, import history and review queue records. Unit policies and item settings are kept.</p>
+          <label class="check-row">
+            <input id="resetAcknowledge" type="checkbox" />
+            <span>I understand this will delete imported operational data from this PC.</span>
+          </label>
+          <button id="resetDataBtn" class="danger" type="button" disabled>Reset Imported Data</button>
+        </div>
+      </section>
+
+      <section class="view" id="review">
+        <div id="reviewSummaryCards" class="mini-stats"></div>
+        <div class="toolbar">
+          <button class="filter-button active" data-review-filter="All">All</button>
+          <button class="filter-button" data-review-filter="Excess Entitlement">Excess Entitlement</button>
+          <button class="filter-button" data-review-filter="Missing Policy">Missing Policy</button>
+          <button class="filter-button" data-review-filter="Incomplete Employee Data">Incomplete Data</button>
+          <button class="filter-button" data-review-filter="Other">Other</button>
+          <button id="recalculateReviewsBtn" class="secondary" type="button">Recalculate Reviews</button>
+        </div>
+        <div class="panel flush">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>ID</th><th>Code</th><th>Name</th><th>Unit</th><th>Period</th><th>Item</th><th>Issued Qty</th><th>Allowed Qty</th><th>Excess Qty</th><th>Item Cost</th><th>Estimated Amount</th><th>Reason</th><th>Status</th><th>Action</th></tr></thead>
+              <tbody id="reviewRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="deductions">
+        <div class="panel">
+          <h3>Salary Deduction History</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Date</th><th>Employee Code</th><th>Employee Name</th><th>Unit</th><th>Period</th><th>Total Amount</th><th>Reason</th><th>Report</th></tr></thead>
+              <tbody id="deductionRows"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>Waive Records</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Date</th><th>Review</th><th>Code</th><th>Name</th><th>Unit</th><th>Remarks</th><th>Reason</th></tr></thead>
+              <tbody id="waiveRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="policies">
+        <div class="panel flush">
+          <div class="panel-heading">
+            <div>
+              <h3>Missing Policy Suggestions</h3>
+              <p>Create policies for unit/item combinations found in the review queue.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Client / Unit</th><th>Item</th><th>Pending Cases</th><th>Sample Employee</th><th>Action</th></tr></thead>
+              <tbody id="missingPolicyRows"></tbody>
+            </table>
+          </div>
+        </div>
+        <form id="policyForm" class="policy-form">
+          <input name="id" type="hidden" />
+          <input name="unit" placeholder="Client / Unit" required />
+          <input name="item_name" placeholder="Item" required />
+          <input name="yearly_entitlement" type="number" min="0" placeholder="Allowed qty" required />
+          <input name="item_cost" type="number" min="0" step="0.01" placeholder="Cost" required />
+          <button id="savePolicyBtn" class="primary" type="submit">Save Policy</button>
+          <button id="cancelPolicyEditBtn" class="secondary" type="button">Clear</button>
+        </form>
+        <div class="policy-browser">
+          <div class="panel flush policy-units-panel">
+            <div class="panel-heading">
+              <div>
+                <h3>Units / Clients</h3>
+                <p>Select a unit to review its policies.</p>
+              </div>
+            </div>
+            <div class="policy-search">
+              <input id="policySearch" placeholder="Search unit, item or policy" />
+            </div>
+            <div id="policyUnitList" class="unit-list"></div>
+          </div>
+          <div class="panel flush">
+            <div class="panel-heading">
+              <div>
+                <h3 id="selectedPolicyUnitTitle">Policies</h3>
+                <p id="selectedPolicyUnitSubtitle">Choose a unit/client to view policies.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Item</th><th>Allowed Qty</th><th>Cost</th><th>Actions</th></tr></thead>
+                <tbody id="policyRows"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="history">
+        <div class="two-col">
+          <div class="panel">
+            <h3>Import History</h3>
+            <div id="importHistory"></div>
+          </div>
+          <div class="panel">
+            <h3>Audit Log</h3>
+            <div id="auditLog"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div id="importModal" class="modal-backdrop">
+      <div class="modal">
+        <header class="modal-header">
+          <div>
+            <h3>Review Workbook Sheets</h3>
+            <p id="importModalSubtitle">Select the sheet that contains the employee distribution data.</p>
+          </div>
+          <button id="closeImportModal" class="secondary" type="button">Cancel</button>
+        </header>
+        <div id="sheetCandidates" class="candidate-list"></div>
+        <footer class="modal-footer">
+          <button id="confirmImportBtn" class="primary" type="button" disabled>Import Selected Sheet</button>
+        </footer>
+      </div>
+    </div>
+
+    <div id="employeeModal" class="modal-backdrop">
+      <form id="employeeForm" class="modal employee-modal">
+        <header class="modal-header">
+          <div>
+            <h3>Edit Employee</h3>
+            <p>Update imported master data stored on this PC.</p>
+          </div>
+          <button id="closeEmployeeModal" class="secondary" type="button">Cancel</button>
+        </header>
+        <div class="employee-form-grid">
+          <label>Employee Code<input name="employee_code" readonly /></label>
+          <label>Employee Name<input name="employee_name" required /></label>
+          <label>Father Name<input name="father_name" /></label>
+          <label>Unit<input name="unit" /></label>
+          <label>Godown<input name="godown" /></label>
+          <label>Mobile<input name="mobile_number" /></label>
+          <label>Designation<input name="designation" /></label>
+          <label>Status<input name="status" /></label>
+        </div>
+        <footer class="modal-footer">
+          <button class="primary" type="submit">Save Employee</button>
+        </footer>
+      </form>
+    </div>
+
+    <div id="reviewDecisionModal" class="modal-backdrop">
+      <form id="reviewDecisionForm" class="modal employee-modal">
+        <header class="modal-header">
+          <div>
+            <h3 id="reviewDecisionTitle">Review Decision</h3>
+            <p id="reviewDecisionSubtitle">Record approval details for audit history.</p>
+          </div>
+          <button id="closeReviewDecisionModal" class="secondary" type="button">Cancel</button>
+        </header>
+        <div class="employee-form-grid">
+          <input name="id" type="hidden" />
+          <input name="status" type="hidden" />
+          <label><span id="decisionByLabel">Approved By</span><input name="approved_by" required /></label>
+          <label>Reason<input name="reason" /></label>
+          <label class="wide-label">Remarks<input name="remarks" /></label>
+        </div>
+        <footer class="modal-footer">
+          <button class="primary" type="submit">Save Decision</button>
+        </footer>
+      </form>
+    </div>
+
+    <div id="distributionModal" class="modal-backdrop">
+      <form id="distributionForm" class="modal">
+        <header class="modal-header">
+          <div>
+            <h3 id="distributionModalTitle">Edit Distribution Row</h3>
+            <p id="distributionModalSubtitle">Update item quantities for this employee/month row.</p>
+          </div>
+          <button id="closeDistributionModal" class="secondary" type="button">Cancel</button>
+        </header>
+        <div id="distributionQuantityFields" class="employee-form-grid"></div>
+        <footer class="modal-footer">
+          <button class="primary" type="submit">Save Distribution</button>
+        </footer>
+      </form>
+    </div>
+
+    <div id="toast" class="toast"></div>
+    <script src="./renderer.js"></script>
+  </body>
+</html>
