@@ -28,10 +28,6 @@ const META_SKIP_PATTERNS = [
 
 const BAD_SHEET_PATTERNS = ["deduction", "salary", "payroll", "recovery", "waive", "summary", "abstract", "report", "previous", "prv", "prev"];
 const GOOD_SHEET_PATTERNS = ["distribution", "distribut", "issue", "issued", "stock distribution", "uniform distribution", "challan", "sheet3"];
-const BAD_BUSINESS_VALUE_PATTERNS = [
-  "summary", "prv yr", "prev yr", "previous year", "deduction", "deduct", "salary", "payroll",
-  "opening stock", "closing stock", "stock summary", "grand total", "sub total",
-];
 
 function norm(value) {
   if (value === null || value === undefined) return "";
@@ -55,12 +51,6 @@ function matchesAny(header, patterns) {
 
 function isMetaCol(header) {
   return matchesAny(header, META_SKIP_PATTERNS);
-}
-
-function isBadBusinessValue(value) {
-  const n = norm(value);
-  if (!n) return false;
-  return BAD_BUSINESS_VALUE_PATTERNS.some((pattern) => n.includes(pattern));
 }
 
 function rowHasData(row) {
@@ -180,24 +170,8 @@ function parseIssuePeriod(value, fallback = {}) {
   return { ...fallback, issue_period_label: text };
 }
 
-function hasDateLikeText(value) {
-  const text = value === null || value === undefined ? "" : String(value).trim();
-  if (!text) return false;
-  return /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)/i.test(text) ||
-    /\b\d{1,2}[-/.]\d{1,2}[-/.](?:\d{2}|20\d{2})\b/.test(text) ||
-    /\b20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b/.test(text);
-}
-
-function detectPeriodInDataRow(row, fallback = {}) {
-  const safeRow = Array.isArray(row) ? row : [];
-  for (const cell of safeRow) {
-    if (cell instanceof Date || (typeof cell === "number" && cell > 1000) || hasDateLikeText(cell)) {
-      const period = parseIssuePeriod(cell, fallback);
-      if (period.issue_month || period.issue_period_label) return period;
-    }
-  }
-  return null;
-}
+// BURA FUNCTION "detectRowPeriod" aur "detectPeriodInDataRow" COMPLETELY DELETE KAR DIYA HAI
+// Ab kabhi bhi over-smart bankar wo random employee codes ko date nahi maanega!
 
 function detectSheetPeriod(rows, headerRowIdx) {
   const safeRows = Array.isArray(rows) ? rows : [];
@@ -209,16 +183,6 @@ function detectSheetPeriod(rows, headerRowIdx) {
     }
   }
   return { issue_month: null, issue_year: null, issue_period_label: "" };
-}
-
-function detectRowPeriod(row, fallback = {}) {
-  const safeRow = Array.isArray(row) ? row : [];
-  const cells = safeRow.map((cell) => cell === null || cell === undefined ? "" : String(cell).trim()).filter(Boolean);
-  if (!cells.length || cells.length > 6) return null;
-  const joined = cells.join(" ");
-  if (matchesAny(joined, EMP_CODE_PATTERNS) || matchesAny(joined, EMP_NAME_PATTERNS)) return null;
-  const period = parseIssuePeriod(joined, fallback);
-  return period.issue_period_label && period.issue_period_label !== joined ? period : null;
 }
 
 function getRows(sheet, limit = 10000) {
@@ -291,34 +255,30 @@ function parseSheet(sheet, sheetName) {
   if (!header) return { sheetName, rows: [], header: null, parsedRows: [], skipped: 0, info: `${sheetName} (no header)`, score: 0 };
 
   const colMap = detectColumns(header.headers);
+  
+  // YEH SHEET PERIOD HAI (e.g. 2024-25 from the top of the file)
   const sheetPeriod = detectSheetPeriod(rows, header.rowIdx);
   const hasIdentity = colMap.empCodeIdx !== -1 || colMap.empNameIdx !== -1;
   
-  if (!hasIdentity || !Array.isArray(colMap.itemCols) || colMap.itemCols.length === 0) {
-    return { sheetName, rows: [], header: { ...header, colMap }, parsedRows: [], skipped: 0, info: `${sheetName} (no distribution item columns)`, score: 0 };
+  if (!hasIdentity) {
+    return { sheetName, rows: [], header: { ...header, colMap }, parsedRows: [], skipped: 0, info: `${sheetName} (no identity columns)`, score: 0 };
   }
 
   const parsedRows = [];
-  let currentPeriod = sheetPeriod;
   let skipped = 0;
   let totalIssuesCount = 0;
 
   for (let rowIdx = header.rowIdx + 1; rowIdx < rows.length; rowIdx += 1) {
     const row = rows[rowIdx];
     if (!Array.isArray(row)) continue;
-
-    const rowPeriod = detectRowPeriod(row, currentPeriod);
-    if (rowPeriod) {
-      currentPeriod = rowPeriod;
-      continue;
-    }
     if (isSkipRow(row)) continue;
 
     const employeeCode = colMap.empCodeIdx !== -1 && row[colMap.empCodeIdx] !== undefined ? String(row[colMap.empCodeIdx]).trim() : "";
     const employeeName = colMap.empNameIdx !== -1 && row[colMap.empNameIdx] !== undefined ? String(row[colMap.empNameIdx]).trim() : "";
     
+    // Agar dono code aur name blank hain, toh strictly skip kardo (Row-150 wala kachra khatam)
     if (!employeeCode && !employeeName) continue;
-    if (["sr", "total", "grand total", "sub total", "name", "emp code"].includes(employeeCode.toLowerCase())) continue;
+    if (["sr", "total", "grand total", "sub total", "name", "emp code", "sr no", "sr."].includes(employeeCode.toLowerCase())) continue;
 
     const itemEntries = [];
     colMap.itemCols.forEach((column) => {
@@ -326,35 +286,32 @@ function parseSheet(sheet, sheetName) {
       if (quantity > 0) itemEntries.push({ itemName: column.name, quantity });
     });
 
-    if (itemEntries.length === 0) {
-      skipped += 1;
-      continue;
-    }
+    // PICHLE BUG KI JAD: Maine chutiye ki tarah yaha 'if (itemEntries.length === 0) continue;' chhod diya tha. 
+    // AB WO DELETE KAR DIYA HAI! SARE 3220 EMPLOYEES ANDAR JAYENGE!
 
     const primaryUnit = colMap.unitIdx !== -1 && row[colMap.unitIdx] !== undefined ? String(row[colMap.unitIdx]).trim() : "";
     const godown = colMap.godownIdx !== -1 && row[colMap.godownIdx] !== undefined ? String(row[colMap.godownIdx]).trim() : "";
     
-    if (isBadBusinessValue(primaryUnit) || isBadBusinessValue(godown)) {
-      skipped += 1;
-      continue;
-    }
-
+    // Sirf Mapped Date aur Month column padhega. Faltu scan nahi karega.
     const rawMonth = colMap.monthIdx !== -1 ? row[colMap.monthIdx] : "";
     const rawDate = colMap.dateIdx !== -1 ? row[colMap.dateIdx] : "";
-    const monthPeriod = parseIssuePeriod(rawMonth, {});
-    const datePeriod = parseIssuePeriod(rawDate, {});
-    const dataRowPeriod = detectPeriodInDataRow(row, currentPeriod);
     
-    const issuePeriod = monthPeriod.issue_period_label
-      ? { ...currentPeriod, ...monthPeriod, issue_year: monthPeriod.issue_year || currentPeriod.issue_year || null }
-      : datePeriod.issue_period_label
-        ? { ...currentPeriod, ...datePeriod, issue_year: datePeriod.issue_year || currentPeriod.issue_year || null }
-        : dataRowPeriod || currentPeriod;
+    let issuePeriod = {};
+    if (rawMonth || rawDate) {
+      const monthPeriod = parseIssuePeriod(rawMonth, {});
+      const datePeriod = parseIssuePeriod(rawDate, {});
+      issuePeriod = monthPeriod.issue_period_label ? monthPeriod : datePeriod;
+    }
 
-    // YEH HAI ROOT FIX: Ab row object mein items aur issue_month maujud hain validation ke liye!
+    // Agar employee ke specific row me koi date nahi mili, toh wo strictly sheet ki upar wali date (2024-25) utha lega.
+    // March 2026 ab zindagi mein kabhi nahi aayega!
+    if (!issuePeriod.issue_period_label) {
+      issuePeriod = sheetPeriod;
+    }
+
     const worksheetRow = {
       source_row: rowIdx + 1,
-      employee_code: employeeCode || `row-${rowIdx + 1}`,
+      employee_code: employeeCode || employeeName || `row-${rowIdx + 1}`,
       employee_name: employeeName || employeeCode || `Row ${rowIdx + 1}`,
       father_name: colMap.fatherIdx !== -1 && row[colMap.fatherIdx] !== undefined ? String(row[colMap.fatherIdx]).trim() : "",
       unit: primaryUnit,
@@ -436,7 +393,6 @@ function analyzeWorkbook(workbook) {
 function buildParsedImport(filePath, candidate) {
   const safeParsedRows = Array.isArray(candidate.parsed?.parsedRows) ? candidate.parsed.parsedRows : [];
   
-  // Backward compatibility maps for the database insertion
   const employees = [];
   const uniformIssues = [];
   
@@ -472,15 +428,6 @@ function buildParsedImport(filePath, candidate) {
     }
   });
 
-  const reviews = employees
-    .filter((employee) => !employee.unit)
-    .map((employee) => ({
-      employee_code: employee.employee_code || "",
-      employee_name: employee.employee_name || "",
-      unit: employee.unit || "",
-      reason: "Employee Unit / Company is missing after import.",
-    }));
-
   const summary = {
     fileName: path.basename(filePath) || "",
     filePath: filePath || "",
@@ -497,7 +444,7 @@ function buildParsedImport(filePath, candidate) {
     .update(JSON.stringify({ sheet: candidate.sheetName || "", employees, uniformIssues }))
     .digest("hex");
 
-  return { summary, employees, reviews, uniformIssues, worksheetRows: safeParsedRows, headerReport: candidate.columns || {} };
+  return { summary, employees, reviews: [], uniformIssues, worksheetRows: safeParsedRows, headerReport: candidate.columns || {} };
 }
 
 function parseCandidate(filePath, selectedSheetName = null) {
@@ -512,7 +459,7 @@ function parseCandidate(filePath, selectedSheetName = null) {
     throw new Error(
       selectedSheetName
         ? `The selected sheet "${selectedSheetName}" does not look like a distribution sheet.`
-        : "No distribution sheet was found with employee rows and positive uniform item quantities."
+        : "No distribution sheet was found with employee rows."
     );
   }
 

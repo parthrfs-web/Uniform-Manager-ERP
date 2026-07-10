@@ -4,6 +4,8 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { createDatabase } = require("./services/database");
 
 let db;
+// YEH HAI MASTER FIX: Jo app ko freeze aur transparent hone se bachayega
+let pendingImportCache = null; 
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -30,7 +32,7 @@ const handleSafe = async (fn) => {
     const data = await fn(); 
     return { ok: true, data }; 
   } catch (error) { 
-    return { ok: false, error: error.message || "An unexpected IPC error occurred." }; 
+    return { ok: false, error: error.message || "An unexpected error occurred." }; 
   }
 };
 
@@ -50,7 +52,6 @@ function runImportWorker(message) {
     
     worker.once("error", (err) => { clearTimeout(timeout); reject(err); });
     worker.once("exit", (code) => { if (code !== 0 && code !== null) { clearTimeout(timeout); reject(new Error(`Worker exited: ${code}`)); } });
-    
     worker.send(message);
   });
 }
@@ -73,21 +74,18 @@ ipcMain.handle("app:chooseAndImportWorkbook", () => handleSafe(async () => {
   return { canceled: false, inspection };
 }));
 
-// YEH MAIN MODULE 3 VALIDATION FLOW HAI
 ipcMain.handle("app:previewImportSelectedSheet", (_event, request) => handleSafe(async () => {
   const start = Date.now();
   const parsedRaw = await runImportWorker({ type: "parse-workbook", filePath: request.filePath, sheetName: request.sheetName });
 
   const parsed = parsedRaw || {};
   parsed.summary = parsed.summary || { totalRows: 0 };
-  parsed.headerReport = parsed.headerReport || {};
-  
-  // Ab safe parsed rows ka use yaha aayega
   parsed.worksheetRows = Array.isArray(parsed.worksheetRows) ? parsed.worksheetRows : [];
 
   const validationErrors = [];
   const validIssues = [];
   const validEmployees = [];
+  const generatedReviews = [];
   
   let totalWorksheetRows = parsed.worksheetRows.length;
   let validWorksheetRows = 0;
@@ -98,11 +96,11 @@ ipcMain.handle("app:previewImportSelectedSheet", (_event, request) => handleSafe
   for (const row of parsed.worksheetRows) {
     let error = null;
     
-    // Yaha jo Date missing ka error aaya tha, ab wo theek chalega kyunki issue_month pass kiya gaya hai.
     if (!row.employee_code) error = "Employee Code missing";
     else if (!row.employee_name) error = "Employee Name missing";
-    else if (!row.unit) error = "Unit not found";
-    else if (!row.issue_month && !row.issue_period_label) error = "Distribution Date missing";
+    else if (row.items && row.items.length > 0 && !row.issue_month && !row.issue_period_label) {
+      error = "Distribution Date missing";
+    }
 
     if (error) {
       validationErrors.push({ row: row.source_row || "-", employee_code: row.employee_code || "-", employee_name: row.employee_name || "-", reason: error });
@@ -121,14 +119,9 @@ ipcMain.handle("app:previewImportSelectedSheet", (_event, request) => handleSafe
         issue_month: row.issue_month, issue_year: row.issue_year, issue_period_label: row.issue_period_label,
         source_sheet: parsed.summary.selectedSheet, source_row: row.source_row
       };
-
-      if (typeof db.isDuplicateIssue === 'function' && !db.isDuplicateIssue(issue)) {
-        allItemsDuplicate = false;
-        rowIssues.push(issue);
-      } else if (typeof db.isDuplicateIssue !== 'function') {
-        allItemsDuplicate = false;
-        rowIssues.push(issue);
-      }
+      // Prevent N+1 UI Freezes
+      allItemsDuplicate = false;
+      rowIssues.push(issue);
     }
 
     if (items.length > 0 && allItemsDuplicate) {
@@ -140,6 +133,9 @@ ipcMain.handle("app:previewImportSelectedSheet", (_event, request) => handleSafe
         employee_code: row.employee_code, employee_name: row.employee_name, father_name: row.father_name,
         unit: row.unit, godown: row.godown, mobile_number: row.mobile_number, designation: row.designation, status: "Active"
       });
+      if (!row.unit) {
+        generatedReviews.push({ employee_code: row.employee_code, employee_name: row.employee_name, unit: "", reason: "Unit Missing" });
+      }
       for (const issue of rowIssues) validIssues.push(issue);
       generatedIssuesCount += rowIssues.length;
     }
@@ -150,83 +146,58 @@ ipcMain.handle("app:previewImportSelectedSheet", (_event, request) => handleSafe
   parsed.summary.invalidWorksheetRows = invalidWorksheetRows;
   parsed.summary.duplicateWorksheetRows = duplicateWorksheetRows;
   parsed.summary.generatedIssues = generatedIssuesCount;
-  
-  parsed.validationErrors = validationErrors;
-  parsed.validIssues = validIssues;
-  parsed.validEmployees = validEmployees;
-  parsed.durationMs = Date.now() - start;
 
-  return { canceled: false, preview: parsed };
+  // HEAVY DATA KO RAM MEIN STORE KARO (TAAKI APP CRASH/TRANSPARENT NA HO)
+  pendingImportCache = {
+      summary: parsed.summary,
+      validEmployees,
+      validIssues,
+      validationErrors,
+      reviews: generatedReviews,
+      durationMs: Date.now() - start
+  };
+
+  // SIRF LIGHTWEIGHT DATA SCREEN PAR BHEJO
+  return { 
+      canceled: false, 
+      preview: { 
+          summary: parsed.summary, 
+          validationErrors: validationErrors 
+      } 
+  };
 }));
 
-// YEH OLD LEGACY FLOW KO BHI SUPPORT KAREGA (Just in case you click a legacy button)
-ipcMain.handle("app:importSelectedSheet", (_event, request) => handleSafe(async () => {
-  const parsedRaw = await runImportWorker({ type: "parse-workbook", filePath: request.filePath, sheetName: request.sheetName });
+ipcMain.handle("app:commitImport", (_event) => handleSafe(async () => {
+  // Let the UI breathe and show the loading spinner properly
+  await new Promise(resolve => setTimeout(resolve, 100));
   
-  const parsed = parsedRaw || {};
-  parsed.summary = parsed.summary || { totalRows: 0 };
-  parsed.employees = Array.isArray(parsed.employees) ? parsed.employees : [];
-  parsed.reviews = Array.isArray(parsed.reviews) ? parsed.reviews : [];
-  parsed.uniformIssues = Array.isArray(parsed.uniformIssues) ? parsed.uniformIssues : [];
-
-  if (parsed.summary.importHash && typeof db.hasImportHash === 'function' && db.hasImportHash(parsed.summary.importHash)) {
-    parsed.summary.duplicate = true; 
-    parsed.summary.inserted = 0; 
-    parsed.summary.updated = 0; 
-    parsed.summary.skipped = parsed.summary.totalRows || 0;
-    return { canceled: false, summary: parsed.summary, state: db.getState() };
-  }
-
-  const saveResult = db.bulkUpsertEmployees(parsed.employees);
-  parsed.summary.inserted = saveResult.inserted || 0;
-  parsed.summary.updated = saveResult.updated || 0;
-  
-  if (typeof db.bulkCreateReviews === 'function') db.bulkCreateReviews(parsed.reviews);
-
-  const importId = db.recordImport(parsed.summary);
-  db.bulkCreateUniformIssues(parsed.uniformIssues, importId);
-  db.ensureDefaultPoliciesForImport(importId);
-  
-  if (typeof db.updateImportReviewsCount === 'function') {
-    const generated = db.evaluateEntitlementsForImport(importId);
-    db.updateImportReviewsCount(importId, generated);
-  } else {
-    db.evaluateEntitlementsForImport(importId);
-  }
-
-  return { canceled: false, summary: parsed.summary, state: db.getState() };
-}));
-
-ipcMain.handle("app:commitImport", (_event, previewData) => handleSafe(async () => {
   const start = Date.now();
-  
-  const safeData = previewData || {};
-  safeData.summary = safeData.summary || {};
-  const validEmployees = Array.isArray(safeData.validEmployees) ? safeData.validEmployees : [];
-  const validIssues = Array.isArray(safeData.validIssues) ? safeData.validIssues : [];
-  const validationErrors = Array.isArray(safeData.validationErrors) ? safeData.validationErrors : [];
-  const reviews = Array.isArray(safeData.reviews) ? safeData.reviews : [];
+  const safeData = pendingImportCache;
+
+  if (!safeData) {
+    throw new Error("Session expired or cache lost. Please select and preview the Excel sheet again.");
+  }
 
   if (safeData.summary.importHash && typeof db.hasImportHash === 'function' && db.hasImportHash(safeData.summary.importHash)) {
     safeData.summary.duplicate = true; 
     safeData.summary.inserted = 0; 
     safeData.summary.updated = 0; 
     safeData.summary.skipped = safeData.summary.totalWorksheetRows || 0;
+    pendingImportCache = null; // Clean RAM
     return { canceled: false, summary: safeData.summary, state: db.getState() };
   }
 
-  const saveResult = db.bulkUpsertEmployees(validEmployees);
+  const saveResult = db.bulkUpsertEmployees(safeData.validEmployees);
   safeData.summary.inserted = saveResult.inserted || 0;
   safeData.summary.updated = saveResult.updated || 0;
   safeData.summary.durationMs = (safeData.durationMs || 0) + (Date.now() - start);
-  safeData.summary.failedCount = validationErrors.length;
+  safeData.summary.failedCount = safeData.validationErrors.length;
   safeData.summary.duplicateCount = safeData.summary.duplicateWorksheetRows || 0;
-  safeData.summary.validationErrors = validationErrors;
 
-  if (typeof db.bulkCreateReviews === 'function') db.bulkCreateReviews(reviews);
+  if (typeof db.bulkCreateReviews === 'function') db.bulkCreateReviews(safeData.reviews);
 
   const importId = db.recordImport(safeData.summary);
-  db.bulkCreateUniformIssues(validIssues, importId);
+  db.bulkCreateUniformIssues(safeData.validIssues, importId);
   db.ensureDefaultPoliciesForImport(importId);
   
   if (typeof db.updateImportReviewsCount === 'function') {
@@ -236,6 +207,7 @@ ipcMain.handle("app:commitImport", (_event, previewData) => handleSafe(async () 
     db.evaluateEntitlementsForImport(importId);
   }
 
+  pendingImportCache = null; // Clean RAM after successful import
   return { canceled: false, summary: safeData.summary, state: db.getState() };
 }));
 
