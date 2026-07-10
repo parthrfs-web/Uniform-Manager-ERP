@@ -89,7 +89,13 @@ const APP_SCHEMA = {
     "total_rows INTEGER NOT NULL",
     "inserted_count INTEGER NOT NULL",
     "updated_count INTEGER NOT NULL",
-    "skipped_count INTEGER NOT NULL"
+    "skipped_count INTEGER NOT NULL",
+    "failed_count INTEGER DEFAULT 0",
+    "duplicate_count INTEGER DEFAULT 0",
+    "validation_errors TEXT",
+    "generated_reviews INTEGER DEFAULT 0",
+    "duration_ms INTEGER DEFAULT 0",
+    "status TEXT DEFAULT 'Completed'"
   ],
   uniform_issues: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -632,8 +638,8 @@ async function createDatabase(userDataPath) {
     recordImport(importRecord) {
       db.run(
         `INSERT INTO imports (
-          file_name, file_path, selected_sheet, import_hash, imported_at, total_rows, inserted_count, updated_count, skipped_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          file_name, file_path, selected_sheet, import_hash, imported_at, total_rows, inserted_count, updated_count, skipped_count, failed_count, duplicate_count, validation_errors, generated_reviews, duration_ms, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           importRecord.fileName,
           importRecord.filePath,
@@ -641,17 +647,84 @@ async function createDatabase(userDataPath) {
           importRecord.importHash || "",
           now(),
           importRecord.totalRows,
-          importRecord.inserted,
-          importRecord.updated,
-          importRecord.skipped,
+          importRecord.inserted || 0,
+          importRecord.updated || 0,
+          importRecord.skipped || 0,
+          importRecord.failedCount || 0,
+          importRecord.duplicateCount || 0,
+          JSON.stringify(importRecord.validationErrors || []),
+          importRecord.generatedReviews || 0,
+          importRecord.durationMs || 0,
+          importRecord.status || 'Completed'
         ]
       );
       audit("Excel Imported", `${importRecord.fileName} sheet ${importRecord.selectedSheet}`);
       save();
       return scalar("SELECT MAX(id) FROM imports");
     },
+    
+    // 👇 YEH FUNCTION MISSING THA JISKI WAJAH SE CRASH HUA!
     hasImportHash(importHash) {
       return Boolean(importHash && scalar("SELECT COUNT(*) FROM imports WHERE import_hash = ?", [importHash]));
+    },
+    
+    updateImportReviewsCount(importId, generated) {
+      db.run("UPDATE imports SET generated_reviews = ? WHERE id = ?", [generated, importId]);
+      save();
+    },
+    
+    isDuplicateIssue(issue) {
+      return scalar(
+        `SELECT COUNT(*) FROM uniform_issues 
+         WHERE employee_code = ? AND lower(item_name) = lower(?)
+           AND COALESCE(issue_month, 0) = COALESCE(?, 0)
+           AND COALESCE(issue_year, 0) = COALESCE(?, 0)
+           AND COALESCE(issue_period_label, '') = COALESCE(?, '')`,
+        [issue.employee_code, issue.item_name, issue.issue_month, issue.issue_year, issue.issue_period_label]
+      ) > 0;
+    },
+    
+    getReviewQueueStage1() {
+      return all(`
+        SELECT 
+          employee_code,
+          employee_name,
+          MAX(unit) AS current_unit,
+          MAX(issue_period_label) AS payroll_month,
+          COUNT(id) AS pending_item_count,
+          SUM(estimated_amount) AS estimated_deduction
+        FROM review_queue
+        WHERE status = 'Pending'
+        GROUP BY employee_code
+        ORDER BY created_at DESC
+      `);
+    },
+    
+    getReviewQueueStage2(employeeCode) {
+      return all(`
+        SELECT * FROM review_queue
+        WHERE employee_code = ?
+        ORDER BY CASE WHEN status = 'Pending' THEN 0 ELSE 1 END, created_at DESC
+      `, [employeeCode]);
+    },
+    
+    getReviewQueueStage3(employeeCode, itemName) {
+      return all(`
+        SELECT 
+          i.issued_at AS issue_date,
+          i.issue_month AS month,
+          i.issue_year AS year,
+          i.unit,
+          i.quantity AS issued_qty,
+          COALESCE(p.yearly_entitlement, 0) AS allowed_qty,
+          COALESCE(r.status, 'No Action') AS previous_decision
+        FROM uniform_issues i
+        LEFT JOIN unit_policies p ON lower(i.unit) = lower(p.unit) AND lower(i.item_name) = lower(p.item_name)
+        LEFT JOIN review_queue r ON i.employee_code = r.employee_code AND lower(i.item_name) = lower(r.item_name) AND COALESCE(i.issue_month, 0) = COALESCE(r.issue_month, 0) AND COALESCE(i.issue_year, 0) = COALESCE(r.issue_year, 0)
+        WHERE i.employee_code = ? AND lower(i.item_name) = lower(?)
+          AND date(i.issued_at) >= date('now', '-2 years')
+        ORDER BY i.issued_at DESC
+      `, [employeeCode, itemName]);
     },
     bulkCreateUniformIssues(issueRows, importId) {
       const validIssueRows = issueRows.filter((row) => Number(row.quantity || 0) > 0 && !isIgnoredIssueItemName(row.item_name));

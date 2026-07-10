@@ -10,6 +10,8 @@ let selectedPolicyUnit = null;
 let policySearch = "";
 let distributionLimit = 20000;
 let pendingDistributionEdit = null;
+let currentPreviewData = null;
+let selectedReviewEmployee = null;
 
 const desktopApi = window.uniformManager;
 
@@ -207,11 +209,17 @@ function setView(name) {
 
 function render() {
   if (!state) return;
-  document.getElementById("dbPath").textContent = state.dbPath;
-  document.getElementById("employeeCount").textContent = state.employees.length;
-  document.getElementById("deductionTotal").textContent = `Rs. ${state.salaryDeductions.reduce((sum, row) => sum + Number(row.amount || 0), 0).toFixed(2)}`;
-  document.getElementById("issueCount").textContent = state.uniformIssueMatrix?.totalRows ?? state.uniformIssueMatrix?.rows?.length ?? 0;
-  document.getElementById("reviewCount").textContent = state.reviewPendingCount ?? state.reviews.filter((r) => r.status === "Pending").length;
+  document.getElementById("dbPath").textContent = state.dbPath || "Unknown";
+  
+  // Safe Array Length checks
+  document.getElementById("employeeCount").textContent = Array.isArray(state.employees) ? state.employees.length : 0;
+  document.getElementById("deductionTotal").textContent = `Rs. ${(Array.isArray(state.salaryDeductions) ? state.salaryDeductions : []).reduce((sum, row) => sum + Number(row.amount || 0), 0).toFixed(2)}`;
+  
+  const matrixRows = state.uniformIssueMatrix?.rows;
+  document.getElementById("issueCount").textContent = state.uniformIssueMatrix?.totalRows ?? (Array.isArray(matrixRows) ? matrixRows.length : 0);
+  
+  const pendingReviews = Array.isArray(state.reviews) ? state.reviews.filter((r) => r.status === "Pending").length : 0;
+  document.getElementById("reviewCount").textContent = state.reviewPendingCount ?? pendingReviews;
 
   renderLatestImport();
   renderEmployees();
@@ -395,22 +403,6 @@ function renderDeductions() {
   `).join("") || `<tr><td colspan="7" class="empty">No waive records created yet. Use Waive in Review Queue.</td></tr>`;
 }
 
-function reviewRow(row, compact = false) {
-  return `
-    <tr>
-      ${compact ? "" : `<td>${row.id}</td>`}
-      <td>${text(row.employee_code)}</td>
-      <td>${text(row.employee_name)}</td>
-      <td>${text(row.unit)}</td>
-      ${compact ? "" : `<td>${text(row.issue_period_label || (row.issue_month && row.issue_year ? `${row.issue_month}/${row.issue_year}` : ""))}</td>`}
-      ${compact ? "" : `<td>${text(row.item_name)}</td><td>${text(row.issued_qty)}</td><td>${row.allowed_qty === null ? "No Policy" : text(row.allowed_qty)}</td><td>${text(row.excess_qty)}</td><td>Rs. ${Number(row.item_cost || 0).toFixed(2)}</td><td>Rs. ${Number(row.estimated_amount || 0).toFixed(2)}</td>`}
-      <td class="reason">${text(row.reason)}</td>
-      <td><span class="badge ${row.status}">${text(row.status)}</span></td>
-      ${compact ? "" : `<td>${decisionButtons(row)}</td>`}
-    </tr>
-  `;
-}
-
 function decisionButtons(row) {
   if (row.status !== "Pending") return text(row.remarks);
   return `
@@ -423,29 +415,90 @@ function decisionButtons(row) {
   `;
 }
 
-function renderReviews() {
-  const pending = state.reviews.filter((row) => row.status === "Pending").slice(0, 8);
-  document.getElementById("dashboardReviews").innerHTML = pending.map((row) => reviewRow(row, true)).join("") ||
-    `<tr><td colspan="5" class="empty">No pending review records.</td></tr>`;
-  const summary = state.reviewSummary || {};
-  const categories = ["Excess Entitlement", "Missing Policy", "Incomplete Employee Data", "Other"];
-  document.getElementById("reviewSummaryCards").innerHTML = categories.map((category) => {
-    const item = summary[category] || { total: 0, pending: 0 };
-    return `<article><span>${category}</span><strong>${item.pending}</strong><small>${item.total} total</small></article>`;
-  }).join("");
-
-  const rows = reviewFilter === "All"
-    ? state.reviews
-    : state.reviews.filter((row) => row.category === reviewFilter);
-  const totalForFilter = reviewFilter === "All"
-    ? Number(state.reviewTotalCount || rows.length)
-    : Number((state.reviewSummary?.[reviewFilter]?.total) || rows.length);
-  const notice = totalForFilter > rows.length
-    ? `<tr><td colspan="14" class="empty">Showing first ${rows.length} of ${totalForFilter} records. Use filters or resolve visible records to continue.</td></tr>`
-    : "";
-  document.getElementById("reviewRows").innerHTML = notice + (rows.map((row) => reviewRow(row)).join("") ||
-    `<tr><td colspan="14" class="empty">No review records in this group.</td></tr>`);
+async function renderReviewStage1() {
+  document.getElementById("reviewStage1").style.display = "block";
+  document.getElementById("reviewStage2").style.display = "none";
+  document.getElementById("reviewStage3").style.display = "none";
+  try {
+    const summary = await window.uniformManager.getReviewQueueStage1();
+    document.getElementById("reviewStage1Rows").innerHTML = summary.map(emp => `
+      <tr class="clickable" onclick="loadReviewStage2('${escapeHtml(emp.employee_code)}', '${escapeHtml(emp.employee_name)}')">
+        <td>${text(emp.employee_code)}</td>
+        <td>${text(emp.employee_name)}</td>
+        <td>${text(emp.current_unit)}</td>
+        <td>${text(emp.payroll_month)}</td>
+        <td>${text(emp.pending_item_count)}</td>
+        <td>Rs. ${Number(emp.estimated_deduction || 0).toFixed(2)}</td>
+      </tr>
+    `).join("") || `<tr><td colspan="6" class="empty">No pending reviews.</td></tr>`;
+  } catch (error) {
+    showImportError(error.message || "Failed to load review summary.");
+  }
 }
+
+async function loadReviewStage2(employeeCode, employeeName) {
+  selectedReviewEmployee = employeeCode;
+  document.getElementById("reviewStage1").style.display = "none";
+  document.getElementById("reviewStage2").style.display = "block";
+  document.getElementById("reviewStage3").style.display = "none";
+  document.getElementById("stage2Title").textContent = `Item Breakdown: ${employeeCode} - ${employeeName}`;
+  try {
+    const items = await window.uniformManager.getReviewQueueStage2(employeeCode);
+    document.getElementById("reviewStage2Rows").innerHTML = items.map(row => {
+      const isPending = row.status === 'Pending';
+      return `
+        <tr class="${isPending ? 'text-red' : 'text-green'}">
+          <td class="clickable" onclick="loadReviewStage3('${escapeHtml(employeeCode)}', '${escapeHtml(row.item_name)}')" style="text-decoration: underline;">${text(row.item_name)}</td>
+          <td>${text(row.status)}</td>
+          <td>${text(row.issued_qty)}</td>
+          <td>${text(row.allowed_qty)}</td>
+          <td>${text(row.excess_qty)}</td>
+          <td class="reason">${text(row.reason)}</td>
+          <td>${isPending ? decisionButtons(row) : ''}</td>
+        </tr>
+      `;
+    }).join("") || `<tr><td colspan="7" class="empty">No items found.</td></tr>`;
+  } catch (error) {
+    showImportError(error.message || "Failed to load items.");
+  }
+}
+
+async function loadReviewStage3(employeeCode, itemName) {
+  document.getElementById("reviewStage2").style.display = "none";
+  document.getElementById("reviewStage3").style.display = "block";
+  document.getElementById("stage3Title").textContent = `History (Last 2 Years): ${itemName}`;
+  try {
+    const history = await window.uniformManager.getReviewQueueStage3(employeeCode, itemName);
+    document.getElementById("reviewStage3Rows").innerHTML = history.map(row => `
+      <tr>
+        <td>${text(row.issue_date).split('T')[0]}</td>
+        <td>${text(row.month)}</td>
+        <td>${text(row.year)}</td>
+        <td>${text(row.unit)}</td>
+        <td>${text(row.issued_qty)}</td>
+        <td>${text(row.allowed_qty)}</td>
+        <td>${text(row.previous_decision)}</td>
+      </tr>
+    `).join("") || `<tr><td colspan="7" class="empty">No history found for the last 2 years.</td></tr>`;
+  } catch (error) {
+    showImportError(error.message || "Failed to load history.");
+  }
+}
+
+function renderReviews() {
+  if (document.getElementById("reviewStage2")?.style.display === "block" && selectedReviewEmployee) {
+    loadReviewStage2(selectedReviewEmployee, selectedReviewEmployee);
+  } else if (document.getElementById("reviewStage3")?.style.display === "block") {
+    // Keep Stage 3 visible
+  } else {
+    renderReviewStage1();
+  }
+}
+
+document.getElementById("backToStage1Btn")?.addEventListener("click", renderReviewStage1);
+document.getElementById("backToStage2Btn")?.addEventListener("click", () => {
+  if (selectedReviewEmployee) loadReviewStage2(selectedReviewEmployee, selectedReviewEmployee);
+});
 
 function renderPolicies() {
   const suggestions = state.missingPolicySuggestions || [];
@@ -531,7 +584,9 @@ function renderHistory() {
     historyEl.innerHTML = state.imports.map((row) => `
       <div class="history-item">
         <strong>${text(row.file_name)}</strong>
-        <span>${text(row.imported_at)} | Sheet ${text(row.selected_sheet)} | Inserted ${row.inserted_count}, updated ${row.updated_count}, skipped ${row.skipped_count}</span>
+        <span>${text(row.imported_at)} | Sheet ${text(row.selected_sheet)} | Status: ${text(row.status)}</span>
+        <span style="display:block; margin-top:4px;">Rows: ${row.total_rows} total | ${row.inserted_count} new | ${row.updated_count} updated | <b style="color:var(--red)">${row.failed_count} failed</b> | <b style="color:var(--amber)">${row.duplicate_count} dupes</b></span>
+        <span style="display:block; margin-top:4px;">Generated ${row.generated_reviews} reviews in ${row.duration_ms}ms</span>
       </div>
     `).join("") || `<div class="empty">No imports yet.</div>`;
   }
@@ -651,23 +706,59 @@ document.getElementById("confirmImportBtn")?.addEventListener("click", async () 
   try {
     setImporting(true);
     document.getElementById("confirmImportBtn").disabled = true;
-    toast(`Importing sheet ${selectedSheetName}.`);
-    const result = await window.uniformManager.importSelectedSheet({
+    toast(`Validating sheet ${selectedSheetName}...`);
+    
+    const result = await window.uniformManager.previewImportSelectedSheet({
       filePath: pendingInspection.filePath,
       sheetName: selectedSheetName,
     });
-    state = result.state;
-    render();
+    
+    currentPreviewData = result.preview;
     hideImportModal();
-    toast(result.summary.duplicate
-      ? "Duplicate import detected. No rows were added."
-      : `Imported ${result.summary.fileName}: ${result.summary.inserted} new, ${result.summary.updated} updated.`);
+    
+    document.getElementById("previewTotal").textContent = currentPreviewData.summary.totalWorksheetRows;
+    document.getElementById("previewValid").textContent = currentPreviewData.summary.validWorksheetRows;
+    document.getElementById("previewErrors").textContent = currentPreviewData.summary.invalidWorksheetRows;
+    document.getElementById("previewDuplicates").textContent = currentPreviewData.summary.duplicateWorksheetRows;
+    document.getElementById("previewIssues").textContent = currentPreviewData.summary.generatedIssues;
+    
+    document.getElementById("previewErrorRows").innerHTML = currentPreviewData.validationErrors.map(e => `
+        <tr><td>${e.row}</td><td>${escapeHtml(e.employee_code)}</td><td>${escapeHtml(e.employee_name)}</td><td class="reason">${escapeHtml(e.reason)}</td></tr>
+    `).join("") || `<tr><td colspan="4" class="empty">No validation errors found on worksheet.</td></tr>`;
+    
+    document.getElementById("importPreviewModal").classList.add("show");
   } catch (error) {
-    showImportError(error.message || "Import failed.");
-    toast("Import failed. Details are shown on the dashboard.");
+    showImportError(error.message || "Preview failed.");
+    toast("Preview failed.");
   } finally {
     setImporting(false);
     document.getElementById("confirmImportBtn").disabled = !selectedSheetName;
+  }
+});
+
+document.getElementById("cancelPreviewBtn")?.addEventListener("click", () => {
+  currentPreviewData = null;
+  document.getElementById("importPreviewModal").classList.remove("show");
+});
+
+document.getElementById("commitImportBtn")?.addEventListener("click", async () => {
+  if (!currentPreviewData) return;
+  try {
+    setImporting(true);
+    document.getElementById("commitImportBtn").disabled = true;
+    toast("Importing and tracking history...");
+    
+    const result = await window.uniformManager.commitImport(currentPreviewData);
+    state = result.state;
+    render();
+    document.getElementById("importPreviewModal").classList.remove("show");
+    currentPreviewData = null;
+    toast(result.summary.duplicate ? "Duplicate import hash detected. Discarded." : "Import completed successfully.");
+  } catch (error) {
+    showImportError(error.message || "Import failed.");
+  } finally {
+    setImporting(false);
+    document.getElementById("commitImportBtn").disabled = false;
   }
 });
 

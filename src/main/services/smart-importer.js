@@ -34,7 +34,8 @@ const BAD_BUSINESS_VALUE_PATTERNS = [
 ];
 
 function norm(value) {
-  return String(value ?? "").toLowerCase().trim().replace(/\s+/g, " ");
+  if (value === null || value === undefined) return "";
+  return String(value).toLowerCase().trim().replace(/\s+/g, " ");
 }
 
 function compact(value) {
@@ -62,12 +63,11 @@ function isBadBusinessValue(value) {
   return BAD_BUSINESS_VALUE_PATTERNS.some((pattern) => n.includes(pattern));
 }
 
-function titleCase(value) {
-  return String(value || "").trim().replace(/\w\S*/g, (part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase());
-}
-
 function rowHasData(row) {
-  return Array.isArray(row) && row.some((cell) => String(cell ?? "").trim() !== "");
+  return Array.isArray(row) && row.some((cell) => {
+    if (cell === null || cell === undefined) return false;
+    return String(cell).trim() !== "";
+  });
 }
 
 function isSkipRow(row) {
@@ -75,32 +75,25 @@ function isSkipRow(row) {
   for (const cell of row) {
     const value = norm(cell);
     if (!value) continue;
-    return ["total", "grand total", "sub total", "subtotal"].includes(value);
+    if (["total", "grand total", "sub total", "subtotal"].includes(value)) return true;
   }
-  return true;
+  return false;
 }
 
 function parseQuantity(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
-  const text = String(value ?? "").trim();
+  if (value === null || value === undefined) return 0;
+  const text = String(value).trim();
   if (!text) return 0;
   const match = text.match(/-?\d+(?:\.\d+)?/);
   return match ? Number(match[0]) : 0;
 }
 
 const MONTH_NAMES = {
-  jan: 1, january: 1,
-  feb: 2, february: 2,
-  mar: 3, march: 3,
-  apr: 4, april: 4,
-  may: 5,
-  jun: 6, june: 6,
-  jul: 7, july: 7,
-  aug: 8, august: 8,
-  sep: 9, sept: 9, september: 9,
-  oct: 10, october: 10,
-  nov: 11, november: 11,
-  dec: 12, december: 12,
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3,
+  apr: 4, april: 4, may: 5, jun: 6, june: 6, jul: 7, july: 7,
+  aug: 8, august: 8, sep: 9, sept: 9, september: 9, oct: 10, october: 10,
+  nov: 11, november: 11, dec: 12, december: 12,
 };
 
 function monthName(month) {
@@ -142,16 +135,18 @@ function parseIssuePeriod(value, fallback = {}) {
     }
   }
 
-  const text = String(value ?? "").trim();
+  const text = value === null || value === undefined ? "" : String(value).trim();
   if (!text) return fallback;
   const clean = text.replace(/[._/]+/g, "-").replace(/\s+/g, " ").trim();
   const lower = clean.toLowerCase();
+  
   const numericMonth = clean.match(/^(0?[1-9]|1[0-2])$/);
   if (numericMonth) {
     const month = Number(numericMonth[1]);
     const year = fallback.issue_year || null;
     return { issue_month: month, issue_year: year, issue_period_label: `${monthName(month)}${year ? ` ${year}` : ""}` };
   }
+  
   const numericDate = clean.match(/\b(?:(\d{1,2})-(\d{1,2})-(20\d{2}|\d{2})|(20\d{2})-(\d{1,2})-(\d{1,2}))\b/);
   if (numericDate) {
     const month = Number(numericDate[2] || numericDate[5]);
@@ -160,6 +155,7 @@ function parseIssuePeriod(value, fallback = {}) {
       return { issue_month: month, issue_year: year, issue_period_label: `${monthName(month)} ${year}` };
     }
   }
+  
   const fiscal = lower.match(/\b(20\d{2})\s*[-–]\s*(\d{2}|20\d{2})\b/);
   const found = [];
   const monthRegex = /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b[\s-]*(\d{2,4})?/gi;
@@ -169,27 +165,23 @@ function parseIssuePeriod(value, fallback = {}) {
     const year = normalizeYear(match[2]) || fallback.issue_year || (fiscal ? Number(fiscal[1]) : null);
     if (month) found.push({ month, year });
   }
+  
   if (found.length) {
     const first = found[0];
-    const label = found
-      .map((entry) => `${monthName(entry.month)}${entry.year ? ` ${entry.year}` : ""}`)
-      .join(" - ");
-    return {
-      issue_month: first.month || null,
-      issue_year: first.year || null,
-      issue_period_label: label,
-    };
+    const label = found.map((entry) => `${monthName(entry.month)}${entry.year ? ` ${entry.year}` : ""}`).join(" - ");
+    return { issue_month: first.month || null, issue_year: first.year || null, issue_period_label: label };
   }
+  
   if (fiscal) {
     const start = Number(fiscal[1]);
-    const end = fiscal[2].length === 2 ? `20${fiscal[2]}` : fiscal[2];
+    const end = typeof fiscal[2] === "string" && fiscal[2].length === 2 ? `20${fiscal[2]}` : fiscal[2];
     return { issue_month: null, issue_year: start, issue_period_label: `${start}-${end}` };
   }
   return { ...fallback, issue_period_label: text };
 }
 
 function hasDateLikeText(value) {
-  const text = String(value ?? "").trim();
+  const text = value === null || value === undefined ? "" : String(value).trim();
   if (!text) return false;
   return /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)/i.test(text) ||
     /\b\d{1,2}[-/.]\d{1,2}[-/.](?:\d{2}|20\d{2})\b/.test(text) ||
@@ -197,7 +189,8 @@ function hasDateLikeText(value) {
 }
 
 function detectPeriodInDataRow(row, fallback = {}) {
-  for (const cell of row || []) {
+  const safeRow = Array.isArray(row) ? row : [];
+  for (const cell of safeRow) {
     if (cell instanceof Date || (typeof cell === "number" && cell > 1000) || hasDateLikeText(cell)) {
       const period = parseIssuePeriod(cell, fallback);
       if (period.issue_month || period.issue_period_label) return period;
@@ -207,8 +200,10 @@ function detectPeriodInDataRow(row, fallback = {}) {
 }
 
 function detectSheetPeriod(rows, headerRowIdx) {
-  for (let rowIdx = 0; rowIdx < Math.min(headerRowIdx, 8); rowIdx += 1) {
-    for (const cell of rows[rowIdx] || []) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  for (let rowIdx = 0; rowIdx < Math.min(headerRowIdx, 8, safeRows.length); rowIdx += 1) {
+    const safeRow = Array.isArray(safeRows[rowIdx]) ? safeRows[rowIdx] : [];
+    for (const cell of safeRow) {
       const period = parseIssuePeriod(cell);
       if (period.issue_period_label) return period;
     }
@@ -217,9 +212,8 @@ function detectSheetPeriod(rows, headerRowIdx) {
 }
 
 function detectRowPeriod(row, fallback = {}) {
-  const cells = (row || [])
-    .map((cell) => String(cell ?? "").trim())
-    .filter(Boolean);
+  const safeRow = Array.isArray(row) ? row : [];
+  const cells = safeRow.map((cell) => cell === null || cell === undefined ? "" : String(cell).trim()).filter(Boolean);
   if (!cells.length || cells.length > 6) return null;
   const joined = cells.join(" ");
   if (matchesAny(joined, EMP_CODE_PATTERNS) || matchesAny(joined, EMP_NAME_PATTERNS)) return null;
@@ -228,24 +222,20 @@ function detectRowPeriod(row, fallback = {}) {
 }
 
 function getRows(sheet, limit = 10000) {
-  return XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", blankrows: false })
-    .filter(rowHasData)
-    .slice(0, limit);
+  if (!sheet) return [];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", blankrows: false });
+  return Array.isArray(rows) ? rows.filter(rowHasData).slice(0, limit) : [];
 }
 
 function readWorkbook(filePath) {
-  return XLSX.readFile(filePath, {
-    cellDates: false,
-    cellStyles: false,
-    cellFormula: false,
-    cellHTML: false,
-    dense: true,
-  });
+  return XLSX.readFile(filePath, { cellDates: false, cellStyles: false, cellFormula: false, cellHTML: false, dense: true });
 }
 
 function findHeaderRow(rows) {
-  for (let rowIdx = 0; rowIdx < Math.min(20, rows.length); rowIdx += 1) {
-    const row = rows[rowIdx];
+  const safeRows = Array.isArray(rows) ? rows : [];
+  for (let rowIdx = 0; rowIdx < Math.min(20, safeRows.length); rowIdx += 1) {
+    const row = safeRows[rowIdx];
+    if (!Array.isArray(row)) continue;
     const hasEmpCode = row.some((cell) => matchesAny(cell, EMP_CODE_PATTERNS));
     const hasEmpName = row.some((cell) => matchesAny(cell, EMP_NAME_PATTERNS));
     const hasSrNo = row.some((cell) => matchesAny(cell, SR_NO_PATTERNS));
@@ -257,58 +247,37 @@ function findHeaderRow(rows) {
   return null;
 }
 
-function detectColumns(headers, rows, headerRowIdx) {
-  const used = new Set();
-  const colMap = {
-    empCodeIdx: -1,
-    empNameIdx: -1,
-    fatherIdx: -1,
-    unitIdx: -1,
-    godownIdx: -1,
-    subUnitIdx: -1,
-    mobileIdx: -1,
-    designationIdx: -1,
-    monthIdx: -1,
-    dateIdx: -1,
-    srNoIdx: -1,
-    itemCols: [],
-  };
+function detectColumns(headers) {
+  const colMap = { empCodeIdx: -1, empNameIdx: -1, fatherIdx: -1, unitIdx: -1, godownIdx: -1, mobileIdx: -1, designationIdx: -1, monthIdx: -1, dateIdx: -1, srNoIdx: -1, itemCols: [] };
+  const safeHeaders = Array.isArray(headers) ? headers : [];
+  if (safeHeaders.length === 0) return colMap;
 
-  headers.forEach((header, idx) => {
+  const used = new Set();
+  safeHeaders.forEach((header, idx) => {
     if (matchesAny(header, GODOWN_PATTERNS)) {
       colMap.godownIdx = idx;
       used.add(idx);
     }
   });
 
-  headers.forEach((header, idx) => {
+  safeHeaders.forEach((header, idx) => {
     if (used.has(idx)) return;
     const n = norm(header);
     if (!n) return;
-    if (colMap.empCodeIdx === -1 && matchesAny(header, EMP_CODE_PATTERNS)) {
-      colMap.empCodeIdx = idx; used.add(idx);
-    } else if (colMap.empNameIdx === -1 && matchesAny(header, EMP_NAME_PATTERNS)) {
-      colMap.empNameIdx = idx; used.add(idx);
-    } else if (colMap.fatherIdx === -1 && matchesAny(header, FATHER_PATTERNS)) {
-      colMap.fatherIdx = idx; used.add(idx);
-    } else if (colMap.mobileIdx === -1 && matchesAny(header, MOBILE_PATTERNS)) {
-      colMap.mobileIdx = idx; used.add(idx);
-    } else if (colMap.designationIdx === -1 && matchesAny(header, DESIGNATION_PATTERNS)) {
-      colMap.designationIdx = idx; used.add(idx);
-    } else if (matchesAny(header, MONTH_PATTERNS)) {
-      colMap.monthIdx = idx; used.add(idx);
-    } else if (matchesAny(header, DATE_PATTERNS)) {
-      colMap.dateIdx = idx; used.add(idx);
-    } else if (colMap.unitIdx === -1 && matchesAny(header, UNIT_PATTERNS)) {
-      colMap.unitIdx = idx; used.add(idx);
-    } else if (colMap.srNoIdx === -1 && matchesAny(header, SR_NO_PATTERNS)) {
-      colMap.srNoIdx = idx; used.add(idx);
-    }
+    if (colMap.empCodeIdx === -1 && matchesAny(header, EMP_CODE_PATTERNS)) { colMap.empCodeIdx = idx; used.add(idx); } 
+    else if (colMap.empNameIdx === -1 && matchesAny(header, EMP_NAME_PATTERNS)) { colMap.empNameIdx = idx; used.add(idx); } 
+    else if (colMap.fatherIdx === -1 && matchesAny(header, FATHER_PATTERNS)) { colMap.fatherIdx = idx; used.add(idx); } 
+    else if (colMap.mobileIdx === -1 && matchesAny(header, MOBILE_PATTERNS)) { colMap.mobileIdx = idx; used.add(idx); } 
+    else if (colMap.designationIdx === -1 && matchesAny(header, DESIGNATION_PATTERNS)) { colMap.designationIdx = idx; used.add(idx); } 
+    else if (matchesAny(header, MONTH_PATTERNS)) { colMap.monthIdx = idx; used.add(idx); } 
+    else if (matchesAny(header, DATE_PATTERNS)) { colMap.dateIdx = idx; used.add(idx); } 
+    else if (colMap.unitIdx === -1 && matchesAny(header, UNIT_PATTERNS)) { colMap.unitIdx = idx; used.add(idx); } 
+    else if (colMap.srNoIdx === -1 && matchesAny(header, SR_NO_PATTERNS)) { colMap.srNoIdx = idx; used.add(idx); }
   });
 
-  headers.forEach((header, idx) => {
+  safeHeaders.forEach((header, idx) => {
     if (used.has(idx)) return;
-    const name = String(header ?? "").trim();
+    const name = header === null || header === undefined ? "" : String(header).trim();
     if (!name || norm(name).length < 2 || isMetaCol(name)) return;
     colMap.itemCols.push({ idx, name });
   });
@@ -319,30 +288,35 @@ function detectColumns(headers, rows, headerRowIdx) {
 function parseSheet(sheet, sheetName) {
   const rows = getRows(sheet);
   const header = findHeaderRow(rows);
-  if (!header) return { sheetName, rows, header: null, parsedRows: [], uniformIssues: [], info: `${sheetName} (no header)`, score: 0 };
+  if (!header) return { sheetName, rows: [], header: null, parsedRows: [], skipped: 0, info: `${sheetName} (no header)`, score: 0 };
 
-  const colMap = detectColumns(header.headers, rows, header.rowIdx);
+  const colMap = detectColumns(header.headers);
   const sheetPeriod = detectSheetPeriod(rows, header.rowIdx);
   const hasIdentity = colMap.empCodeIdx !== -1 || colMap.empNameIdx !== -1;
-  if (!hasIdentity || colMap.itemCols.length === 0) {
-    return { sheetName, rows, header: { ...header, colMap }, parsedRows: [], uniformIssues: [], info: `${sheetName} (no distribution item columns)`, score: 0 };
+  
+  if (!hasIdentity || !Array.isArray(colMap.itemCols) || colMap.itemCols.length === 0) {
+    return { sheetName, rows: [], header: { ...header, colMap }, parsedRows: [], skipped: 0, info: `${sheetName} (no distribution item columns)`, score: 0 };
   }
 
   const parsedRows = [];
-  const uniformIssues = [];
   let currentPeriod = sheetPeriod;
   let skipped = 0;
+  let totalIssuesCount = 0;
 
   for (let rowIdx = header.rowIdx + 1; rowIdx < rows.length; rowIdx += 1) {
     const row = rows[rowIdx];
+    if (!Array.isArray(row)) continue;
+
     const rowPeriod = detectRowPeriod(row, currentPeriod);
     if (rowPeriod) {
       currentPeriod = rowPeriod;
       continue;
     }
     if (isSkipRow(row)) continue;
-    const employeeCode = colMap.empCodeIdx !== -1 ? String(row[colMap.empCodeIdx] ?? "").trim() : "";
-    const employeeName = colMap.empNameIdx !== -1 ? String(row[colMap.empNameIdx] ?? "").trim() : "";
+
+    const employeeCode = colMap.empCodeIdx !== -1 && row[colMap.empCodeIdx] !== undefined ? String(row[colMap.empCodeIdx]).trim() : "";
+    const employeeName = colMap.empNameIdx !== -1 && row[colMap.empNameIdx] !== undefined ? String(row[colMap.empNameIdx]).trim() : "";
+    
     if (!employeeCode && !employeeName) continue;
     if (["sr", "total", "grand total", "sub total", "name", "emp code"].includes(employeeCode.toLowerCase())) continue;
 
@@ -351,172 +325,194 @@ function parseSheet(sheet, sheetName) {
       const quantity = parseQuantity(row[column.idx]);
       if (quantity > 0) itemEntries.push({ itemName: column.name, quantity });
     });
+
     if (itemEntries.length === 0) {
       skipped += 1;
       continue;
     }
 
-    const primaryUnit = colMap.unitIdx !== -1 ? String(row[colMap.unitIdx] ?? "").trim() : "";
-    const godown = colMap.godownIdx !== -1 ? String(row[colMap.godownIdx] ?? "").trim() : "";
+    const primaryUnit = colMap.unitIdx !== -1 && row[colMap.unitIdx] !== undefined ? String(row[colMap.unitIdx]).trim() : "";
+    const godown = colMap.godownIdx !== -1 && row[colMap.godownIdx] !== undefined ? String(row[colMap.godownIdx]).trim() : "";
+    
     if (isBadBusinessValue(primaryUnit) || isBadBusinessValue(godown)) {
       skipped += 1;
       continue;
     }
-    const employee = {
-      employee_code: employeeCode || `row-${rowIdx + 1}`,
-      employee_name: employeeName || employeeCode || `Row ${rowIdx + 1}`,
-      father_name: colMap.fatherIdx !== -1 ? String(row[colMap.fatherIdx] ?? "").trim() : "",
-      unit: primaryUnit,
-      godown,
-      mobile_number: colMap.mobileIdx !== -1 ? String(row[colMap.mobileIdx] ?? "").trim() : "",
-      designation: colMap.designationIdx !== -1 ? String(row[colMap.designationIdx] ?? "").trim() : "",
-      status: "Active",
-      source_row: rowIdx + 1,
-    };
+
     const rawMonth = colMap.monthIdx !== -1 ? row[colMap.monthIdx] : "";
     const rawDate = colMap.dateIdx !== -1 ? row[colMap.dateIdx] : "";
     const monthPeriod = parseIssuePeriod(rawMonth, {});
     const datePeriod = parseIssuePeriod(rawDate, {});
     const dataRowPeriod = detectPeriodInDataRow(row, currentPeriod);
+    
     const issuePeriod = monthPeriod.issue_period_label
       ? { ...currentPeriod, ...monthPeriod, issue_year: monthPeriod.issue_year || currentPeriod.issue_year || null }
       : datePeriod.issue_period_label
         ? { ...currentPeriod, ...datePeriod, issue_year: datePeriod.issue_year || currentPeriod.issue_year || null }
         : dataRowPeriod || currentPeriod;
-    parsedRows.push(employee);
-    itemEntries.forEach((entry) => {
-      uniformIssues.push({
-        employee_code: employee.employee_code,
-        employee_name: employee.employee_name,
-        unit: employee.unit,
-        godown: employee.godown,
-        item_name: entry.itemName,
-        quantity: entry.quantity,
-        source_sheet: sheetName,
-        source_row: rowIdx + 1,
-        issue_month: issuePeriod.issue_month || null,
-        issue_year: issuePeriod.issue_year || null,
-        issue_period_label: issuePeriod.issue_period_label || "",
-      });
-    });
+
+    // YEH HAI ROOT FIX: Ab row object mein items aur issue_month maujud hain validation ke liye!
+    const worksheetRow = {
+      source_row: rowIdx + 1,
+      employee_code: employeeCode || `row-${rowIdx + 1}`,
+      employee_name: employeeName || employeeCode || `Row ${rowIdx + 1}`,
+      father_name: colMap.fatherIdx !== -1 && row[colMap.fatherIdx] !== undefined ? String(row[colMap.fatherIdx]).trim() : "",
+      unit: primaryUnit,
+      godown: godown,
+      mobile_number: colMap.mobileIdx !== -1 && row[colMap.mobileIdx] !== undefined ? String(row[colMap.mobileIdx]).trim() : "",
+      designation: colMap.designationIdx !== -1 && row[colMap.designationIdx] !== undefined ? String(row[colMap.designationIdx]).trim() : "",
+      status: "Active",
+      issue_month: issuePeriod.issue_month || null,
+      issue_year: issuePeriod.issue_year || null,
+      issue_period_label: issuePeriod.issue_period_label || "",
+      items: itemEntries
+    };
+
+    parsedRows.push(worksheetRow);
+    totalIssuesCount += itemEntries.length;
   }
 
-  const sheetText = `${sheetName} ${header.headers.join(" ")}`;
+  const safeHeaders = Array.isArray(header.headers) ? header.headers : [];
+  const sheetText = `${sheetName} ${safeHeaders.join(" ")}`;
   const badPenalty = BAD_SHEET_PATTERNS.reduce((sum, pattern) => sum + (norm(sheetText).includes(pattern) ? 8 : 0), 0);
   const goodBonus = GOOD_SHEET_PATTERNS.reduce((sum, pattern) => sum + (norm(sheetName).includes(pattern) ? 4 : 0), 0);
-  const score = parsedRows.length + uniformIssues.length + (colMap.godownIdx !== -1 ? 20 : 0) + goodBonus - badPenalty;
+  const score = parsedRows.length + totalIssuesCount + (colMap.godownIdx !== -1 ? 20 : 0) + goodBonus - badPenalty;
 
   return {
     sheetName,
     rows,
     header: { ...header, colMap },
     parsedRows,
-    uniformIssues,
     skipped,
-    info: `${sheetName}: ${parsedRows.length} employees, ${uniformIssues.length} item entries`,
+    info: `${sheetName}: ${parsedRows.length} employees, ${totalIssuesCount} item entries`,
     score,
   };
 }
 
 function analyzeWorkbook(workbook) {
+  if (!workbook || !Array.isArray(workbook.SheetNames)) return [];
+
   return workbook.SheetNames
     .map((sheetName) => {
       const parsed = parseSheet(workbook.Sheets[sheetName], sheetName);
       const header = parsed.header;
+      
       const columns = header ? {
-        employee_code: header.colMap.empCodeIdx !== -1 ? String(header.headers[header.colMap.empCodeIdx] ?? "") : "",
-        employee_name: header.colMap.empNameIdx !== -1 ? String(header.headers[header.colMap.empNameIdx] ?? "") : "",
-        father_name: header.colMap.fatherIdx !== -1 ? String(header.headers[header.colMap.fatherIdx] ?? "") : "",
-        unit: header.colMap.unitIdx !== -1 ? String(header.headers[header.colMap.unitIdx] ?? "") : "",
-        godown: header.colMap.godownIdx !== -1 ? String(header.headers[header.colMap.godownIdx] ?? "") : "",
-        mobile_number: header.colMap.mobileIdx !== -1 ? String(header.headers[header.colMap.mobileIdx] ?? "") : "",
-        designation: header.colMap.designationIdx !== -1 ? String(header.headers[header.colMap.designationIdx] ?? "") : "",
+        employee_code: header.colMap.empCodeIdx !== -1 ? String(header.headers[header.colMap.empCodeIdx] || "") : "",
+        employee_name: header.colMap.empNameIdx !== -1 ? String(header.headers[header.colMap.empNameIdx] || "") : "",
+        father_name: header.colMap.fatherIdx !== -1 ? String(header.headers[header.colMap.fatherIdx] || "") : "",
+        unit: header.colMap.unitIdx !== -1 ? String(header.headers[header.colMap.unitIdx] || "") : "",
+        godown: header.colMap.godownIdx !== -1 ? String(header.headers[header.colMap.godownIdx] || "") : "",
+        mobile_number: header.colMap.mobileIdx !== -1 ? String(header.headers[header.colMap.mobileIdx] || "") : "",
+        designation: header.colMap.designationIdx !== -1 ? String(header.headers[header.colMap.designationIdx] || "") : "",
       } : {};
+
       const reasons = [parsed.info];
-      if (header?.colMap.unitIdx !== -1) reasons.push("Unit detected as Unit / Company");
-      if (header?.colMap.godownIdx !== -1) reasons.push("Godown detected as Godown");
-      if (parsed.uniformIssues.length === 0) reasons.push("No positive uniform item quantities found");
+      if (header && header.colMap.unitIdx !== -1) reasons.push("Unit detected as Unit / Company");
+      if (header && header.colMap.godownIdx !== -1) reasons.push("Godown detected as Godown");
+
       return {
         sheetName,
-        rows: parsed.rows,
+        rows: Array.isArray(parsed.rows) ? parsed.rows : [],
         parsed,
         header,
-        likelyRows: parsed.parsedRows.length,
-        score: parsed.score,
+        likelyRows: Array.isArray(parsed.parsedRows) ? parsed.parsedRows.length : 0,
+        score: parsed.score || 0,
         columns,
-        itemColumns: header ? header.colMap.itemCols.map((column) => ({ index: column.idx, itemName: column.name })) : [],
-        sampleRows: parsed.parsedRows.slice(0, 5).map((row) => ({
+        itemColumns: header && Array.isArray(header.colMap.itemCols) ? header.colMap.itemCols.map((column) => ({ index: column.idx, itemName: column.name })) : [],
+        sampleRows: Array.isArray(parsed.parsedRows) ? parsed.parsedRows.slice(0, 5).map((row) => ({
           employee_code: row.employee_code,
           employee_name: row.employee_name,
           father_name: row.father_name,
           unit: row.unit,
           godown: row.godown,
-        })),
+        })) : [],
         reasons,
       };
     })
     .sort((a, b) => b.score - a.score);
 }
 
-function detectSheet(workbook) {
-  return analyzeWorkbook(workbook).find((candidate) => candidate.parsed.parsedRows.length > 0 && candidate.parsed.uniformIssues.length > 0) || null;
-}
-
-function describeWorkbook(workbook) {
-  return workbook.SheetNames.map((sheetName) => {
-    const rows = getRows(workbook.Sheets[sheetName], 8);
-    const previewRows = rows.slice(0, 8)
-      .map((row, index) => {
-        const cells = row.slice(0, 14).map((cell) => String(cell || "").trim()).filter(Boolean);
-        return cells.length ? `row ${index + 1}: ${cells.join(" | ")}` : "";
-      })
-      .filter(Boolean);
-    return `${sheetName}: ${previewRows.join(" / ") || "no visible headers"}`;
-  }).join("\n");
-}
-
 function buildParsedImport(filePath, candidate) {
-  const employees = candidate.parsed.parsedRows.map(({ source_row, ...employee }) => employee);
-  const uniformIssues = candidate.parsed.uniformIssues;
+  const safeParsedRows = Array.isArray(candidate.parsed?.parsedRows) ? candidate.parsed.parsedRows : [];
+  
+  // Backward compatibility maps for the database insertion
+  const employees = [];
+  const uniformIssues = [];
+  
+  safeParsedRows.forEach(row => {
+    employees.push({
+      source_row: row.source_row,
+      employee_code: row.employee_code,
+      employee_name: row.employee_name,
+      father_name: row.father_name,
+      unit: row.unit,
+      godown: row.godown,
+      mobile_number: row.mobile_number,
+      designation: row.designation,
+      status: row.status
+    });
+    
+    if (Array.isArray(row.items)) {
+      row.items.forEach(item => {
+        uniformIssues.push({
+          employee_code: row.employee_code,
+          employee_name: row.employee_name,
+          unit: row.unit,
+          godown: row.godown,
+          item_name: item.itemName,
+          quantity: item.quantity,
+          source_sheet: candidate.sheetName,
+          source_row: row.source_row,
+          issue_month: row.issue_month,
+          issue_year: row.issue_year,
+          issue_period_label: row.issue_period_label
+        });
+      });
+    }
+  });
+
   const reviews = employees
     .filter((employee) => !employee.unit)
     .map((employee) => ({
-      employee_code: employee.employee_code,
-      employee_name: employee.employee_name,
+      employee_code: employee.employee_code || "",
+      employee_name: employee.employee_name || "",
       unit: employee.unit || "",
       reason: "Employee Unit / Company is missing after import.",
     }));
 
   const summary = {
-    fileName: path.basename(filePath),
-    filePath,
-    selectedSheet: candidate.sheetName,
+    fileName: path.basename(filePath) || "",
+    filePath: filePath || "",
+    selectedSheet: candidate.sheetName || "",
     importHash: "",
-    totalRows: candidate.parsed.parsedRows.length,
+    totalRows: safeParsedRows.length,
     inserted: 0,
     updated: 0,
-    skipped: candidate.parsed.skipped || 0,
+    skipped: candidate.parsed?.skipped || 0,
   };
+
   summary.importHash = crypto
     .createHash("sha256")
-    .update(JSON.stringify({ sheet: candidate.sheetName, employees, uniformIssues }))
+    .update(JSON.stringify({ sheet: candidate.sheetName || "", employees, uniformIssues }))
     .digest("hex");
 
-  return { summary, employees, reviews, uniformIssues };
+  return { summary, employees, reviews, uniformIssues, worksheetRows: safeParsedRows, headerReport: candidate.columns || {} };
 }
 
 function parseCandidate(filePath, selectedSheetName = null) {
   const workbook = readWorkbook(filePath);
   const candidates = analyzeWorkbook(workbook);
+  
   const detected = selectedSheetName
     ? candidates.find((candidate) => candidate.sheetName === selectedSheetName)
-    : candidates.find((candidate) => candidate.parsed.parsedRows.length > 0 && candidate.parsed.uniformIssues.length > 0);
+    : candidates.find((candidate) => Array.isArray(candidate.parsed?.parsedRows) && candidate.parsed.parsedRows.length > 0);
 
-  if (!detected || detected.parsed.parsedRows.length === 0 || detected.parsed.uniformIssues.length === 0) {
+  if (!detected || !Array.isArray(detected.parsed?.parsedRows) || detected.parsed.parsedRows.length === 0) {
     throw new Error(
       selectedSheetName
-        ? `The selected sheet "${selectedSheetName}" does not look like a distribution sheet with employee rows and positive uniform item quantities.`
-        : "No distribution sheet was found with employee rows and positive uniform item quantities.\n\nWorkbook preview:\n" + describeWorkbook(workbook)
+        ? `The selected sheet "${selectedSheetName}" does not look like a distribution sheet.`
+        : "No distribution sheet was found with employee rows and positive uniform item quantities."
     );
   }
 
@@ -526,41 +522,22 @@ function parseCandidate(filePath, selectedSheetName = null) {
 function inspectWorkbook(filePath) {
   const workbook = readWorkbook(filePath);
   const candidates = analyzeWorkbook(workbook);
+  
   return {
-    fileName: path.basename(filePath),
-    filePath,
-    candidates: candidates.map((candidate) => ({
-      sheetName: candidate.sheetName,
-      canImport: candidate.parsed.parsedRows.length > 0 && candidate.parsed.uniformIssues.length > 0,
-      score: Number(candidate.score.toFixed(2)),
-      likelyRows: candidate.likelyRows,
+    fileName: path.basename(filePath) || "",
+    filePath: filePath || "",
+    candidates: Array.isArray(candidates) ? candidates.map((candidate) => ({
+      sheetName: candidate.sheetName || "",
+      canImport: Boolean(Array.isArray(candidate.parsed?.parsedRows) && candidate.parsed.parsedRows.length > 0),
+      score: Number((candidate.score || 0).toFixed(2)),
+      likelyRows: Number(candidate.likelyRows || 0),
       headerRow: candidate.header ? candidate.header.rowIdx + 1 : null,
-      columns: candidate.columns,
-      itemColumns: candidate.itemColumns,
-      sampleRows: candidate.sampleRows,
-      reasons: candidate.reasons,
-    })),
+      columns: candidate.columns || {},
+      itemColumns: Array.isArray(candidate.itemColumns) ? candidate.itemColumns : [],
+      sampleRows: Array.isArray(candidate.sampleRows) ? candidate.sampleRows : [],
+      reasons: Array.isArray(candidate.reasons) ? candidate.reasons : [],
+    })) : [],
   };
 }
 
-function parseWorkbook(filePath) {
-  return parseCandidate(filePath);
-}
-
-function importWorkbook(filePath, database) {
-  const parsed = parseWorkbook(filePath);
-  if (database.hasImportHash(parsed.summary.importHash)) {
-    return { ...parsed.summary, duplicate: true, inserted: 0, updated: 0, skipped: parsed.summary.totalRows };
-  }
-  const result = database.bulkUpsertEmployees(parsed.employees);
-  parsed.summary.inserted = result.inserted;
-  parsed.summary.updated = result.updated;
-  database.bulkCreateReviews(parsed.reviews);
-  const importId = database.recordImport(parsed.summary);
-  database.bulkCreateUniformIssues(parsed.uniformIssues || [], importId);
-  database.ensureDefaultPoliciesForImport(importId);
-  database.evaluateEntitlementsForImport(importId);
-  return parsed.summary;
-}
-
-module.exports = { importWorkbook, parseWorkbook, parseCandidate, inspectWorkbook, detectSheet, analyzeWorkbook };
+module.exports = { parseCandidate, inspectWorkbook };

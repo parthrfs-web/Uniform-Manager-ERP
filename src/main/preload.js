@@ -11,7 +11,11 @@ const safeInvoke = async (channel, ...args) => {
 contextBridge.exposeInMainWorld("uniformManager", {
   getState: (options) => safeInvoke("app:getState", options),
   chooseAndImportWorkbook: () => safeInvoke("app:chooseAndImportWorkbook"),
-  importSelectedSheet: (request) => safeInvoke("app:importSelectedSheet", request),
+  previewImportSelectedSheet: (request) => safeInvoke("app:previewImportSelectedSheet", request),
+  commitImport: (data) => safeInvoke("app:commitImport", data),
+  getReviewQueueStage1: () => safeInvoke("app:getReviewQueueStage1"),
+  getReviewQueueStage2: (code) => safeInvoke("app:getReviewQueueStage2", code),
+  getReviewQueueStage3: (req) => safeInvoke("app:getReviewQueueStage3", req),
   upsertPolicy: (policy) => safeInvoke("app:upsertPolicy", policy),
   deletePolicy: (policyId) => safeInvoke("app:deletePolicy", policyId),
   recalculateReviews: () => safeInvoke("app:recalculateReviews"),

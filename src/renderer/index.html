@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Uniform Manager</title>
     <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .text-red td { color: var(--red); font-weight: 500; }
+      .text-green td { color: var(--green); font-weight: 500; }
+      .clickable { cursor: pointer; transition: background 0.2s; }
+      .clickable:hover { background: #1f2b3d; }
+    </style>
   </head>
   <body>
     <aside class="sidebar">
@@ -54,15 +60,6 @@
           <h3>Latest Import Result</h3>
           <div id="lastImport" class="empty">No workbook imported yet.</div>
         </div>
-        <div class="panel">
-          <h3>Pending Review Queue</h3>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Code</th><th>Name</th><th>Unit</th><th>Reason</th><th>Status</th></tr></thead>
-              <tbody id="dashboardReviews"></tbody>
-            </table>
-          </div>
-        </div>
       </section>
 
       <section class="view" id="import">
@@ -92,15 +89,6 @@
             <table>
               <thead><tr><th>Code</th><th>Item</th><th>Category</th><th>Size</th><th>Cost</th><th>Stock</th><th>Min</th><th>Status</th><th>Actions</th></tr></thead>
               <tbody id="itemRows"></tbody>
-            </table>
-          </div>
-        </div>
-        <div class="panel">
-          <h3>Recent Stock Movements</h3>
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>Item</th><th>Type</th><th>Qty</th><th>Reference</th><th>Notes</th><th>Date</th></tr></thead>
-              <tbody id="movementRows"></tbody>
             </table>
           </div>
         </div>
@@ -158,21 +146,47 @@
       </section>
 
       <section class="view" id="review">
-        <div id="reviewSummaryCards" class="mini-stats"></div>
-        <div class="toolbar">
-          <button class="filter-button active" data-review-filter="All">All</button>
-          <button class="filter-button" data-review-filter="Excess Entitlement">Excess Entitlement</button>
-          <button class="filter-button" data-review-filter="Missing Policy">Missing Policy</button>
-          <button class="filter-button" data-review-filter="Incomplete Employee Data">Incomplete Data</button>
-          <button class="filter-button" data-review-filter="Other">Other</button>
-          <button id="recalculateReviewsBtn" class="secondary" type="button">Recalculate Reviews</button>
+        <div id="reviewStage1">
+          <div class="toolbar">
+            <button id="recalculateReviewsBtn" class="secondary" type="button">Recalculate Reviews</button>
+          </div>
+          <div class="panel flush">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Employee Code</th><th>Name</th><th>Current Unit</th><th>Payroll Month</th><th>Pending Items</th><th>Est. Deduction</th></tr></thead>
+                <tbody id="reviewStage1Rows"></tbody>
+              </table>
+            </div>
+          </div>
         </div>
-        <div class="panel flush">
-          <div class="table-wrap">
-            <table>
-              <thead><tr><th>ID</th><th>Code</th><th>Name</th><th>Unit</th><th>Period</th><th>Item</th><th>Issued Qty</th><th>Allowed Qty</th><th>Excess Qty</th><th>Item Cost</th><th>Estimated Amount</th><th>Reason</th><th>Status</th><th>Action</th></tr></thead>
-              <tbody id="reviewRows"></tbody>
-            </table>
+
+        <div id="reviewStage2" style="display: none;">
+          <div class="toolbar">
+            <button id="backToStage1Btn" class="secondary">← Back to Employees</button>
+            <h3 id="stage2Title" style="margin-left: 10px;">Item Breakdown</h3>
+          </div>
+          <div class="panel flush">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Item</th><th>Status</th><th>Issued Qty</th><th>Allowed Qty</th><th>Excess Qty</th><th>Reason</th><th>Action</th></tr></thead>
+                <tbody id="reviewStage2Rows"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div id="reviewStage3" style="display: none;">
+          <div class="toolbar">
+            <button id="backToStage2Btn" class="secondary">← Back to Items</button>
+            <h3 id="stage3Title" style="margin-left: 10px;">History (Last 2 Years)</h3>
+          </div>
+          <div class="panel flush">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Issue Date</th><th>Month</th><th>Year</th><th>Unit</th><th>Issued Qty</th><th>Allowed Qty</th><th>Previous Decision</th></tr></thead>
+                <tbody id="reviewStage3Rows"></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </section>
@@ -266,6 +280,36 @@
       </section>
     </main>
 
+    <div id="importPreviewModal" class="modal-backdrop">
+      <div class="modal" style="width: 90vw; max-width: 1200px;">
+        <header class="modal-header">
+          <div>
+            <h3>Import Validation Preview</h3>
+            <p>Review validation errors and duplicates before committing.</p>
+          </div>
+          <button id="cancelPreviewBtn" class="secondary" type="button">Cancel</button>
+        </header>
+        <div class="panel" style="margin: 18px;">
+            <div class="mini-stats" style="grid-template-columns: repeat(5, minmax(130px, 1fr));">
+              <article><span>Worksheet Rows</span><strong id="previewTotal">0</strong></article>
+              <article><span>Valid Rows</span><strong id="previewValid" class="text-green">0</strong></article>
+              <article><span>Invalid Rows</span><strong id="previewErrors" class="text-red">0</strong></article>
+              <article><span>Duplicate Rows</span><strong id="previewDuplicates" class="text-amber">0</strong></article>
+              <article><span>Generated Issues</span><strong id="previewIssues">0</strong></article>
+            </div>
+            <div class="table-wrap" style="max-height: 400px; overflow: auto; border: 1px solid var(--line); border-radius: 6px;">
+                <table>
+                    <thead><tr><th>Row</th><th>Code</th><th>Name</th><th>Reason</th></tr></thead>
+                    <tbody id="previewErrorRows"></tbody>
+                </table>
+            </div>
+        </div>
+        <footer class="modal-footer">
+          <button id="commitImportBtn" class="primary" type="button">Confirm & Import</button>
+        </footer>
+      </div>
+    </div>
+
     <div id="importModal" class="modal-backdrop">
       <div class="modal">
         <header class="modal-header">
@@ -277,7 +321,7 @@
         </header>
         <div id="sheetCandidates" class="candidate-list"></div>
         <footer class="modal-footer">
-          <button id="confirmImportBtn" class="primary" type="button" disabled>Import Selected Sheet</button>
+          <button id="confirmImportBtn" class="primary" type="button" disabled>Preview Data</button>
         </footer>
       </div>
     </div>
