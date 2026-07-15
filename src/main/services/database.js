@@ -32,9 +32,6 @@ function classifyReviewReason(reason) {
   return "Other";
 }
 
-// ---------------------------------------------------------
-// DEFINITIVE SCHEMA MAP FOR AUTOMATIC SYNCHRONIZATION
-// ---------------------------------------------------------
 const APP_SCHEMA = {
   employees: [
     "employee_code TEXT PRIMARY KEY",
@@ -234,30 +231,23 @@ async function createDatabase(userDataPath) {
     db.run("INSERT INTO audit_log (action, details, created_at) VALUES (?, ?, ?)", [action, details, now()]);
   }
 
-  // ---------------------------------------------------------
-  // AUTOMATIC SCHEMA SYNCHRONIZATION ENGINE
-  // ---------------------------------------------------------
   function syncSchema() {
     db.run("BEGIN TRANSACTION");
     try {
-      // 1. Create all missing tables
       for (const [tableName, columns] of Object.entries(APP_SCHEMA)) {
         const colDefs = columns.join(", ");
         db.run(`CREATE TABLE IF NOT EXISTS ${tableName} (${colDefs})`);
       }
 
-      // 2. Scan and repair missing columns in existing tables (Safe Migration)
       for (const [tableName, columns] of Object.entries(APP_SCHEMA)) {
         const existingCols = all(`PRAGMA table_info(${tableName})`).map(r => r.name);
         for (const colDef of columns) {
           const match = colDef.match(/^([A-Za-z0-9_]+)/);
           if (match) {
             const colName = match[1];
-            // Skip parsing structural constraints as columns
             if (!["UNIQUE", "PRIMARY", "FOREIGN", "CHECK"].includes(colName.toUpperCase())) {
               if (!existingCols.includes(colName)) {
                 db.run(`ALTER TABLE ${tableName} ADD COLUMN ${colDef}`);
-                // Safely log the migration if audit_log is ready
                 if (existingCols.length > 0 && tableName !== "audit_log") {
                   db.run("INSERT INTO audit_log (action, details, created_at) VALUES (?, ?, ?)", 
                     ["Schema Migrated", `Added missing column '${colName}' to table '${tableName}'`, now()]
@@ -269,9 +259,7 @@ async function createDatabase(userDataPath) {
         }
       }
 
-      // 3. Create required performance & uniqueness indexes
       db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_unit_item ON unit_policies(unit, item_name)");
-      
       db.run("COMMIT");
     } catch (error) {
       db.run("ROLLBACK");
@@ -280,7 +268,6 @@ async function createDatabase(userDataPath) {
     }
   }
 
-  // Execute schema synchronization on startup
   syncSchema();
   seedDefaults();
   save();
@@ -461,11 +448,12 @@ async function createDatabase(userDataPath) {
       [review.employee_code]
     );
     const currentPeriod = review.issue_period_label || (review.issue_month && review.issue_year ? `${review.issue_month}/${review.issue_year}` : "");
-    const itemCost = Number(review.item_cost || 0);
     const excessQty = Number(review.excess_qty || 0);
-    const itemAmount = Number(review.estimated_amount || deduction.amount || 0);
     const totalAmount = Number(deduction.amount || 0);
+    const itemAmount = totalAmount; 
+    const itemCost = excessQty > 0 ? itemAmount / excessQty : Number(review.item_cost || 0);
     const createdAt = deduction.created_at || new Date().toISOString();
+    
     const detailRows = [
       [
         fitText(review.item_name || "Uniform Item", 24),
@@ -487,7 +475,7 @@ async function createDatabase(userDataPath) {
       "UNIFORM MANAGER",
       "SALARY DEDUCTION REPORT",
       "==============================================================",
-      `Report No : DED-${deduction.id}                         Review ID : ${review.id}`,
+      `Report No : DED-${deduction.id}                        Review ID : ${review.id}`,
       `Generated : ${createdAt}`,
       `Period    : ${currentPeriod || "-"}`,
       "",
@@ -597,44 +585,92 @@ async function createDatabase(userDataPath) {
       }
       return { inserted, updated };
     },
+    
     bulkCreateReviews(reviewRows) {
       if (!reviewRows.length) return;
       const createdAt = now();
-      const stmt = db.prepare(
+      
+      const checkStmt = db.prepare(`
+        SELECT id 
+        FROM review_queue 
+        WHERE status = 'Pending' 
+          AND employee_code = ? 
+          AND lower(item_name) = lower(?)
+          AND lower(COALESCE(issue_period_label, '')) = lower(COALESCE(?, ''))
+          AND COALESCE(issue_month, 0) = COALESCE(?, 0)
+          AND COALESCE(issue_year, 0) = COALESCE(?, 0)
+      `);
+      
+      const updateStmt = db.prepare(`
+        UPDATE review_queue 
+        SET issued_qty = ?, 
+            excess_qty = excess_qty + ?, 
+            estimated_amount = estimated_amount + ? 
+        WHERE id = ?
+      `);
+
+      const insertStmt = db.prepare(
         `INSERT INTO review_queue (
           employee_code, employee_name, unit, item_name, issue_month, issue_year, issue_period_label, issued_qty, allowed_qty, excess_qty,
           item_cost, estimated_amount, reason, status, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)`
       );
+
       db.run("BEGIN TRANSACTION");
       try {
         reviewRows.forEach((row) => {
-          stmt.run([
+          checkStmt.bind([
             row.employee_code,
-            row.employee_name,
-            row.unit || "",
             row.item_name || "",
-            row.issue_month ? Number(row.issue_month) : null,
-            row.issue_year ? Number(row.issue_year) : null,
             row.issue_period_label || "",
-            Number(row.issued_qty || 0),
-            row.allowed_qty === null || row.allowed_qty === undefined ? null : Number(row.allowed_qty || 0),
-            Number(row.excess_qty || 0),
-            Number(row.item_cost || 0),
-            Number(row.estimated_amount || 0),
-            row.reason,
-            createdAt,
+            row.issue_month ? Number(row.issue_month) : 0,
+            row.issue_year ? Number(row.issue_year) : 0
           ]);
+          
+          let existingId = null;
+          if (checkStmt.step()) {
+            existingId = checkStmt.getAsObject().id;
+          }
+          checkStmt.reset();
+
+          if (existingId) {
+             updateStmt.run([
+               Number(row.issued_qty || 0), 
+               Number(row.excess_qty || 0), 
+               Number(row.estimated_amount || 0), 
+               existingId
+             ]);
+          } else {
+             insertStmt.run([
+                row.employee_code,
+                row.employee_name,
+                row.unit || "",
+                row.item_name || "",
+                row.issue_month ? Number(row.issue_month) : null,
+                row.issue_year ? Number(row.issue_year) : null,
+                row.issue_period_label || "",
+                Number(row.issued_qty || 0),
+                row.allowed_qty === null || row.allowed_qty === undefined ? null : Number(row.allowed_qty || 0),
+                Number(row.excess_qty || 0),
+                Number(row.item_cost || 0),
+                Number(row.estimated_amount || 0),
+                row.reason,
+                createdAt,
+             ]);
+          }
         });
         db.run("COMMIT");
       } catch (error) {
         db.run("ROLLBACK");
         throw error;
       } finally {
-        stmt.free();
+        checkStmt.free();
+        updateStmt.free();
+        insertStmt.free();
       }
-      audit("Reviews Bulk Created", `${reviewRows.length} review rows created from import.`);
+      audit("Reviews Bulk Created", `${reviewRows.length} review rows processed (inserted/updated) from import.`);
     },
+    
     recordImport(importRecord) {
       db.run(
         `INSERT INTO imports (
@@ -663,7 +699,6 @@ async function createDatabase(userDataPath) {
       return scalar("SELECT MAX(id) FROM imports");
     },
     
-    // 👇 YEH FUNCTION MISSING THA JISKI WAJAH SE CRASH HUA!
     hasImportHash(importHash) {
       return Boolean(importHash && scalar("SELECT COUNT(*) FROM imports WHERE import_hash = ?", [importHash]));
     },
@@ -687,45 +722,86 @@ async function createDatabase(userDataPath) {
     getReviewQueueStage1() {
       return all(`
         SELECT 
-          employee_code,
-          employee_name,
-          MAX(unit) AS current_unit,
-          MAX(issue_period_label) AS payroll_month,
-          COUNT(id) AS pending_item_count,
-          SUM(estimated_amount) AS estimated_deduction
-        FROM review_queue
-        WHERE status = 'Pending'
-        GROUP BY employee_code
-        ORDER BY created_at DESC
+          rq.employee_code,
+          rq.employee_name,
+          MAX(rq.unit) AS current_unit,
+          MAX(rq.issue_period_label) AS payroll_month,
+          COUNT(rq.id) AS pending_item_count,
+          SUM(rq.excess_qty * COALESCE(ui.cost, 0)) AS estimated_deduction
+        FROM review_queue rq
+        LEFT JOIN (
+            SELECT lower(item_name) AS search_name, MAX(cost) AS cost
+            FROM uniform_items
+            GROUP BY lower(item_name)
+        ) ui ON lower(rq.item_name) = ui.search_name
+        WHERE rq.status = 'Pending'
+        GROUP BY rq.employee_code
+        ORDER BY rq.created_at DESC
       `);
     },
     
     getReviewQueueStage2(employeeCode) {
       return all(`
-        SELECT * FROM review_queue
-        WHERE employee_code = ?
-        ORDER BY CASE WHEN status = 'Pending' THEN 0 ELSE 1 END, created_at DESC
+        SELECT 
+          rq.*,
+          COALESCE(ui.cost, 0) AS live_rate,
+          (rq.excess_qty * COALESCE(ui.cost, 0)) AS live_amount
+        FROM review_queue rq
+        LEFT JOIN (
+            SELECT lower(item_name) AS search_name, MAX(cost) AS cost
+            FROM uniform_items
+            GROUP BY lower(item_name)
+        ) ui ON lower(rq.item_name) = ui.search_name
+        WHERE rq.employee_code = ?
+        ORDER BY CASE WHEN rq.status = 'Pending' THEN 0 ELSE 1 END, rq.created_at DESC
       `, [employeeCode]);
     },
     
-    getReviewQueueStage3(employeeCode, itemName) {
+    getReviewQueueStage3(req) {
       return all(`
         SELECT 
-          i.issued_at AS issue_date,
-          i.issue_month AS month,
-          i.issue_year AS year,
-          i.unit,
-          i.quantity AS issued_qty,
-          COALESCE(p.yearly_entitlement, 0) AS allowed_qty,
-          COALESCE(r.status, 'No Action') AS previous_decision
+          COALESCE(
+            NULLIF(TRIM(i.issue_period_label), ''), 
+            CASE WHEN i.issue_year > 0 THEN i.issue_year || '-' || substr('00' || COALESCE(i.issue_month, 1), -2, 2) || '-01' ELSE NULL END, 
+            date(MAX(i.issued_at))
+          ) AS issue_date,
+          COALESCE(i.issue_month, 0) AS month,
+          COALESCE(i.issue_year, 0) AS year,
+          MAX(i.unit) AS unit,
+          SUM(i.quantity) AS issued_qty,
+          COALESCE(MAX(p.yearly_entitlement), 0) AS allowed_qty,
+          COALESCE(MAX(r.status), 'No Action') AS previous_decision
         FROM uniform_issues i
-        LEFT JOIN unit_policies p ON lower(i.unit) = lower(p.unit) AND lower(i.item_name) = lower(p.item_name)
-        LEFT JOIN review_queue r ON i.employee_code = r.employee_code AND lower(i.item_name) = lower(r.item_name) AND COALESCE(i.issue_month, 0) = COALESCE(r.issue_month, 0) AND COALESCE(i.issue_year, 0) = COALESCE(r.issue_year, 0)
-        WHERE i.employee_code = ? AND lower(i.item_name) = lower(?)
-          AND date(i.issued_at) >= date('now', '-2 years')
-        ORDER BY i.issued_at DESC
-      `, [employeeCode, itemName]);
+        LEFT JOIN unit_policies p 
+          ON lower(TRIM(COALESCE(i.unit, ''))) = lower(TRIM(COALESCE(p.unit, ''))) 
+          AND lower(TRIM(i.item_name)) = lower(TRIM(p.item_name))
+        LEFT JOIN review_queue r 
+          ON i.employee_code = r.employee_code 
+          AND lower(TRIM(i.item_name)) = lower(TRIM(r.item_name)) 
+          AND COALESCE(i.issue_month, 0) = COALESCE(r.issue_month, 0) 
+          AND COALESCE(i.issue_year, 0) = COALESCE(r.issue_year, 0)
+          AND lower(TRIM(COALESCE(i.issue_period_label, ''))) = lower(TRIM(COALESCE(r.issue_period_label, '')))
+        WHERE i.employee_code = ? 
+          AND lower(TRIM(i.item_name)) = lower(TRIM(?))
+          AND i.quantity > 0
+          AND (
+            i.issue_year >= (CAST(strftime('%Y', 'now') AS INTEGER) - 2)
+            OR date(i.issued_at) >= date('now', '-2 years')
+            OR (i.issue_year IS NULL OR i.issue_year = 0)
+          )
+        GROUP BY 
+          i.employee_code, 
+          lower(TRIM(i.item_name)), 
+          COALESCE(i.issue_year, 0), 
+          COALESCE(i.issue_month, 0), 
+          lower(TRIM(COALESCE(i.issue_period_label, '')))
+        ORDER BY 
+          COALESCE(i.issue_year, 0) DESC, 
+          COALESCE(i.issue_month, 0) DESC,
+          MAX(i.issued_at) DESC
+      `, [req.code, req.item]);
     },
+
     bulkCreateUniformIssues(issueRows, importId) {
       const validIssueRows = issueRows.filter((row) => Number(row.quantity || 0) > 0 && !isIgnoredIssueItemName(row.item_name));
       if (!validIssueRows.length) return;
@@ -773,9 +849,20 @@ async function createDatabase(userDataPath) {
       }
       return created;
     },
-    evaluateEntitlementsForImport(importId) {
+    async evaluateEntitlementsForImport(importId, progressCallback) {
       const importedIssues = all("SELECT * FROM uniform_issues WHERE import_id = ? AND quantity > 0", [Number(importId)]);
       if (!importedIssues.length) return 0;
+
+      // DEBUG: Setup trackers for Rajjan Kumar
+      let rajjanDistRows = 0;
+      let rajjanIssues = 0;
+      let rajjanReviews = 0;
+      importedIssues.forEach(issue => {
+          if (String(issue.employee_name || "").toLowerCase().includes("rajjan") || String(issue.employee_code) === "Rajjan Kumar") {
+              rajjanDistRows++;
+              rajjanIssues += Number(issue.quantity || 0);
+          }
+      });
 
       const policies = all("SELECT * FROM unit_policies");
       const policyByUnitItem = new Map(
@@ -787,31 +874,41 @@ async function createDatabase(userDataPath) {
 
       const reviewRows = [];
       const checked = new Set();
+      
+      let processed = 0;
+      const total = importedIssues.length;
 
-      importedIssues.forEach((issue) => {
+      for (const issue of importedIssues) {
         const periodKey = issue.issue_period_label || `${issue.issue_month || ""}/${issue.issue_year || ""}`;
-        const key = `${issue.employee_code}|${issue.unit}|${issue.item_name}|${periodKey}`.toLowerCase();
-        if (checked.has(key)) return;
+        
+        // BUG FIX: Removed `unit` from the unique check key. 
+        // This stops multiple duplicate rows from firing if the employee was logged with varying units in the same import period.
+        const key = `${issue.employee_code}|${issue.item_name}|${periodKey}`.toLowerCase();
+        
+        if (checked.has(key)) continue;
         checked.add(key);
 
         const policy = policyByUnitItem.get(`${String(issue.unit).toLowerCase()}|${String(issue.item_name).toLowerCase()}`);
-        const importedQuantity = scalar(
-          `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
-           WHERE import_id = ? AND employee_code = ? AND lower(item_name) = lower(?)
-             AND COALESCE(issue_period_label, '') = COALESCE(?, '')
-             AND COALESCE(issue_month, 0) = COALESCE(?, 0)
-             AND COALESCE(issue_year, 0) = COALESCE(?, 0)`,
-          [
-            Number(importId),
-            issue.employee_code,
-            issue.item_name,
-            issue.issue_period_label || "",
-            issue.issue_month || 0,
-            issue.issue_year || 0,
-          ]
-        );
+        
+        const isRajjan = String(issue.employee_name || "").toLowerCase().includes("rajjan") || String(issue.employee_code) === "Rajjan Kumar";
 
         if (!policy) {
+          const importedQuantity = scalar(
+            `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
+             WHERE import_id = ? AND employee_code = ? AND lower(item_name) = lower(?)
+               AND lower(COALESCE(issue_period_label, '')) = lower(COALESCE(?, ''))
+               AND COALESCE(issue_month, 0) = COALESCE(?, 0)
+               AND COALESCE(issue_year, 0) = COALESCE(?, 0)`,
+            [
+              Number(importId),
+              issue.employee_code,
+              issue.item_name,
+              issue.issue_period_label || "",
+              issue.issue_month || 0,
+              issue.issue_year || 0,
+            ]
+          );
+
           reviewRows.push({
             employee_code: issue.employee_code,
             employee_name: issue.employee_name,
@@ -827,57 +924,77 @@ async function createDatabase(userDataPath) {
             estimated_amount: 0,
             reason: `No entitlement policy found for ${issue.unit || "Unknown Unit"} / ${issue.item_name}.`,
           });
-          return;
-        }
+          
+          if (isRajjan) rajjanReviews++;
+          
+        } else {
+          const periodFilter = issue.issue_year
+            ? { sql: " AND issue_year = ?", params: [issue.issue_year] }
+            : issue.issue_period_label
+              ? { sql: " AND lower(COALESCE(issue_period_label, '')) = lower(?)", params: [issue.issue_period_label] }
+              : { sql: "", params: [] };
+          
+          // BUG FIX: Removed `unit` filter from SQL aggregates. Ensures employee totals are evaluated 
+          // globally for the period, correctly mapping to a single unified entitlement.
+          const annualQuantity = scalar(
+            `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
+             WHERE employee_code = ? AND lower(item_name) = lower(?)
+             ${periodFilter.sql}`,
+            [issue.employee_code, issue.item_name, ...periodFilter.params]
+          );
+          const allowed = Number(policy.yearly_entitlement || 0);
+          
+          const settledQuantity = scalar(
+            `SELECT COALESCE(SUM(excess_qty), 0) FROM review_queue
+             WHERE employee_code = ? AND lower(item_name) = lower(?)
+               AND status IN ('Waived', 'Deducted', 'Deduct')
+               ${periodFilter.sql}`,
+            [issue.employee_code, issue.item_name, ...periodFilter.params]
+          );
+          const unresolvedQuantity = scalar(
+            `SELECT COALESCE(SUM(excess_qty), 0) FROM review_queue
+             WHERE employee_code = ? AND lower(item_name) = lower(?)
+               AND status IN ('Pending', 'Held', 'Hold')
+               ${periodFilter.sql}`,
+            [issue.employee_code, issue.item_name, ...periodFilter.params]
+          );
 
-        const periodFilter = issue.issue_year
-          ? { sql: " AND issue_year = ?", params: [issue.issue_year] }
-          : issue.issue_period_label
-            ? { sql: " AND COALESCE(issue_period_label, '') = ?", params: [issue.issue_period_label] }
-            : { sql: "", params: [] };
+          if (annualQuantity > allowed + settledQuantity + unresolvedQuantity) {
+            const excess = annualQuantity - allowed - settledQuantity - unresolvedQuantity;
+            const amount = excess * Number(policy.item_cost || 0);
+            reviewRows.push({
+              employee_code: issue.employee_code,
+              employee_name: issue.employee_name,
+              unit: issue.unit || "",
+              item_name: issue.item_name,
+              issue_month: issue.issue_month || null,
+              issue_year: issue.issue_year || null,
+              issue_period_label: issue.issue_period_label || "",
+              issued_qty: annualQuantity,
+              allowed_qty: allowed,
+              excess_qty: excess,
+              item_cost: Number(policy.item_cost || 0),
+              estimated_amount: amount,
+              reason: `${issue.item_name} entitlement exceeded.`,
+            });
+            if (isRajjan) rajjanReviews++;
+          }
+        }
         
-        const annualQuantity = scalar(
-          `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
-           WHERE employee_code = ? AND lower(unit) = lower(?) AND lower(item_name) = lower(?)
-           ${periodFilter.sql}`,
-          [issue.employee_code, issue.unit || "", issue.item_name, ...periodFilter.params]
-        );
-        const allowed = Number(policy.yearly_entitlement || 0);
-        const settledQuantity = scalar(
-          `SELECT COALESCE(SUM(excess_qty), 0) FROM review_queue
-           WHERE employee_code = ? AND lower(unit) = lower(?) AND lower(item_name) = lower(?)
-             AND status IN ('Waived', 'Deduct')
-             ${periodFilter.sql}`,
-          [issue.employee_code, issue.unit || "", issue.item_name, ...periodFilter.params]
-        );
-        const unresolvedQuantity = scalar(
-          `SELECT COALESCE(SUM(excess_qty), 0) FROM review_queue
-           WHERE employee_code = ? AND lower(unit) = lower(?) AND lower(item_name) = lower(?)
-             AND status IN ('Pending', 'Hold')
-             ${periodFilter.sql}`,
-          [issue.employee_code, issue.unit || "", issue.item_name, ...periodFilter.params]
-        );
-
-        if (annualQuantity > allowed + settledQuantity + unresolvedQuantity) {
-          const excess = annualQuantity - allowed - settledQuantity - unresolvedQuantity;
-          const amount = excess * Number(policy.item_cost || 0);
-          reviewRows.push({
-            employee_code: issue.employee_code,
-            employee_name: issue.employee_name,
-            unit: issue.unit || "",
-            item_name: issue.item_name,
-            issue_month: issue.issue_month || null,
-            issue_year: issue.issue_year || null,
-            issue_period_label: issue.issue_period_label || "",
-            issued_qty: annualQuantity,
-            allowed_qty: allowed,
-            excess_qty: excess,
-            item_cost: Number(policy.item_cost || 0),
-            estimated_amount: amount,
-            reason: `${issue.item_name} entitlement exceeded.`,
-          });
+        processed++;
+        if (processed % 25 === 0) {
+           if (progressCallback) progressCallback(processed, total);
+           await new Promise(resolve => setTimeout(resolve, 0));
         }
-      });
+      }
+
+      // Output debug logs for Rajjan Kumar tracking
+      if (rajjanDistRows > 0) {
+          console.log(`\nEmployee: Rajjan Kumar`);
+          console.log(`Distribution rows found: ${rajjanDistRows}`);
+          console.log(`Uniform issues found: ${rajjanIssues}`);
+          console.log(`Review rows generated: ${rajjanReviews}\n`);
+      }
 
       this.bulkCreateReviews(reviewRows);
       if (reviewRows.length) {
@@ -886,13 +1003,18 @@ async function createDatabase(userDataPath) {
       }
       return reviewRows.length;
     },
-    recalculateReviews() {
+    async recalculateReviews(onProgress) {
       const imports = all("SELECT id FROM imports ORDER BY id ASC");
       let generated = 0;
+      
+      // CLEAR all old generated Pending reviews explicitly to prevent duplication creep
       db.run("DELETE FROM review_queue WHERE status = 'Pending'");
-      imports.forEach((importRow) => {
-        generated += this.evaluateEntitlementsForImport(importRow.id);
-      });
+      
+      for (let i = 0; i < imports.length; i++) {
+         generated += await this.evaluateEntitlementsForImport(imports[i].id, (processed, total) => {
+             if (onProgress) onProgress(imports[i].id, i + 1, imports.length, processed, total);
+         });
+      }
       audit("Review Queue Recalculated", `${generated} pending review rows generated from current policies.`);
       save();
       return generated;
@@ -1035,27 +1157,46 @@ async function createDatabase(userDataPath) {
     updateReview(action) {
       const review = all("SELECT * FROM review_queue WHERE id = ?", [Number(action.id)])[0];
       if (!review) throw new Error(`Review #${action.id} was not found.`);
-      const validStatuses = new Set(["Waived", "Hold", "Deduct"]);
+      
+      if (action.status === 'Pending') {
+        db.run("UPDATE review_queue SET status = 'Pending', remarks = NULL, decided_at = NULL WHERE id = ?", [Number(action.id)]);
+        db.run("DELETE FROM review_decisions WHERE review_id = ?", [Number(action.id)]);
+        db.run("DELETE FROM salary_deductions WHERE review_id = ?", [Number(action.id)]);
+        db.run("DELETE FROM waive_records WHERE review_id = ?", [Number(action.id)]);
+        audit("Review Reverted", `Review #${action.id} reverted to Pending.`);
+        save();
+        return;
+      }
+
+      const validStatuses = new Set(["Waived", "Held", "Deducted"]);
       if (!validStatuses.has(action.status)) throw new Error("Invalid review decision.");
+      
       const approvedBy = String(action.approved_by || "").trim();
       const reason = String(action.reason || "").trim();
       const remarks = String(action.remarks || "").trim();
+      
       if (!approvedBy) throw new Error("Approved by is required for review decisions.");
-      if ((action.status === "Waived" || action.status === "Deduct") && !reason) {
-        throw new Error("Reason is required for Waive Off and Deduct From Salary.");
+      if ((action.status === "Waived" || action.status === "Deducted") && !reason) {
+        throw new Error("Reason is required for Waive and Deduct decisions.");
       }
+      
       db.run(
         "UPDATE review_queue SET status = ?, remarks = ?, decided_at = ? WHERE id = ?",
         [action.status, remarks || reason, now(), Number(action.id)]
       );
+      
       db.run(
         `INSERT INTO review_decisions (review_id, employee_code, employee_name, unit, decision, reason, approved_by, remarks, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [Number(action.id), review.employee_code, review.employee_name, review.unit || "", action.status, reason, approvedBy, remarks, now()]
       );
-      if (action.status === "Deduct") {
+      
+      if (action.status === "Deducted") {
         const existing = scalar("SELECT COUNT(*) FROM salary_deductions WHERE review_id = ?", [Number(action.id)]);
         if (!existing) {
-          const amount = Number(review.estimated_amount || extractAmount(review.reason) || 0);
+          const liveCost = scalar("SELECT MAX(cost) FROM uniform_items WHERE lower(item_name) = lower(?)", [review.item_name]) || 0;
+          const liveAmount = review.excess_qty * liveCost;
+          const amount = liveAmount > 0 ? liveAmount : Number(review.estimated_amount || extractAmount(review.reason) || 0);
+          
           db.run(
             `INSERT INTO salary_deductions (review_id, employee_code, employee_name, unit, issue_month, issue_year, issue_period_label, amount, reason, status, created_at, approved_by, approval_date, remarks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Payroll', ?, ?, ?, ?)`,
             [Number(action.id), review.employee_code, review.employee_name, review.unit || "", review.issue_month || null, review.issue_year || null, review.issue_period_label || "", amount, reason || review.reason, now(), approvedBy, now(), remarks]
@@ -1066,6 +1207,7 @@ async function createDatabase(userDataPath) {
           audit("Salary Deduction Created", `Review #${action.id}: ${review.employee_code}`);
         }
       }
+      
       if (action.status === "Waived") {
         const existing = scalar("SELECT COUNT(*) FROM waive_records WHERE review_id = ?", [Number(action.id)]);
         if (!existing) {
@@ -1116,7 +1258,11 @@ async function createDatabase(userDataPath) {
       save();
     },
     getState(options = {}) {
-      const distributionLimit = Math.max(300, Math.min(Number(options.distributionLimit || 20000), 20000));
+      const limitParam = options ? options.distributionLimit : undefined;
+      const distributionLimit = limitParam !== undefined 
+          ? Math.max(300, Math.min(Number(limitParam), 20000)) 
+          : 300; 
+
       const issueRows = all("SELECT * FROM uniform_issues WHERE quantity > 0 ORDER BY COALESCE(issue_year, 9999), COALESCE(issue_month, 99), import_id ASC, source_row ASC, id ASC")
         .filter((row) => !isIgnoredIssueItemName(row.item_name));
       
@@ -1233,10 +1379,7 @@ async function createDatabase(userDataPath) {
         policies,
         items: all("SELECT *, CASE WHEN available_stock <= minimum_stock THEN 1 ELSE 0 END AS is_low_stock FROM uniform_items ORDER BY item_name, size"),
         stockMovements: all("SELECT * FROM stock_movements ORDER BY created_at DESC, id DESC LIMIT 100"),
-        
-        // FIXED: Using exact correct snake_case table name 'salary_deductions'
         salaryDeductions: all("SELECT * FROM salary_deductions ORDER BY created_at DESC, id DESC"),
-        
         waiveRecords: all("SELECT * FROM waive_records ORDER BY created_at DESC, id DESC"),
         reviewDecisions: all("SELECT * FROM review_decisions ORDER BY created_at DESC, id DESC LIMIT 200"),
         recoveryRecords: all("SELECT * FROM recovery_records ORDER BY created_at DESC, id DESC"),

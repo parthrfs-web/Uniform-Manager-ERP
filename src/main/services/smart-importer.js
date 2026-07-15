@@ -170,9 +170,6 @@ function parseIssuePeriod(value, fallback = {}) {
   return { ...fallback, issue_period_label: text };
 }
 
-// BURA FUNCTION "detectRowPeriod" aur "detectPeriodInDataRow" COMPLETELY DELETE KAR DIYA HAI
-// Ab kabhi bhi over-smart bankar wo random employee codes ko date nahi maanega!
-
 function detectSheetPeriod(rows, headerRowIdx) {
   const safeRows = Array.isArray(rows) ? rows : [];
   for (let rowIdx = 0; rowIdx < Math.min(headerRowIdx, 8, safeRows.length); rowIdx += 1) {
@@ -256,7 +253,6 @@ function parseSheet(sheet, sheetName) {
 
   const colMap = detectColumns(header.headers);
   
-  // YEH SHEET PERIOD HAI (e.g. 2024-25 from the top of the file)
   const sheetPeriod = detectSheetPeriod(rows, header.rowIdx);
   const hasIdentity = colMap.empCodeIdx !== -1 || colMap.empNameIdx !== -1;
   
@@ -273,12 +269,17 @@ function parseSheet(sheet, sheetName) {
     if (!Array.isArray(row)) continue;
     if (isSkipRow(row)) continue;
 
-    const employeeCode = colMap.empCodeIdx !== -1 && row[colMap.empCodeIdx] !== undefined ? String(row[colMap.empCodeIdx]).trim() : "";
+    let employeeCode = colMap.empCodeIdx !== -1 && row[colMap.empCodeIdx] !== undefined ? String(row[colMap.empCodeIdx]).trim() : "";
     const employeeName = colMap.empNameIdx !== -1 && row[colMap.empNameIdx] !== undefined ? String(row[colMap.empNameIdx]).trim() : "";
     
-    // Agar dono code aur name blank hain, toh strictly skip kardo (Row-150 wala kachra khatam)
+    // Agar dono code aur name blank hain, toh strictly skip kardo
     if (!employeeCode && !employeeName) continue;
     if (["sr", "total", "grand total", "sub total", "name", "emp code", "sr no", "sr."].includes(employeeCode.toLowerCase())) continue;
+
+    // Apply strict fallback for missing or invalid employee codes
+    if (!employeeCode || ["#ref!", "#n/a", "na", "n/a", "-", "null", "undefined"].includes(employeeCode.toLowerCase())) {
+      employeeCode = "Unknown";
+    }
 
     const itemEntries = [];
     colMap.itemCols.forEach((column) => {
@@ -286,13 +287,9 @@ function parseSheet(sheet, sheetName) {
       if (quantity > 0) itemEntries.push({ itemName: column.name, quantity });
     });
 
-    // PICHLE BUG KI JAD: Maine chutiye ki tarah yaha 'if (itemEntries.length === 0) continue;' chhod diya tha. 
-    // AB WO DELETE KAR DIYA HAI! SARE 3220 EMPLOYEES ANDAR JAYENGE!
-
     const primaryUnit = colMap.unitIdx !== -1 && row[colMap.unitIdx] !== undefined ? String(row[colMap.unitIdx]).trim() : "";
     const godown = colMap.godownIdx !== -1 && row[colMap.godownIdx] !== undefined ? String(row[colMap.godownIdx]).trim() : "";
     
-    // Sirf Mapped Date aur Month column padhega. Faltu scan nahi karega.
     const rawMonth = colMap.monthIdx !== -1 ? row[colMap.monthIdx] : "";
     const rawDate = colMap.dateIdx !== -1 ? row[colMap.dateIdx] : "";
     
@@ -303,16 +300,14 @@ function parseSheet(sheet, sheetName) {
       issuePeriod = monthPeriod.issue_period_label ? monthPeriod : datePeriod;
     }
 
-    // Agar employee ke specific row me koi date nahi mili, toh wo strictly sheet ki upar wali date (2024-25) utha lega.
-    // March 2026 ab zindagi mein kabhi nahi aayega!
     if (!issuePeriod.issue_period_label) {
       issuePeriod = sheetPeriod;
     }
 
     const worksheetRow = {
       source_row: rowIdx + 1,
-      employee_code: employeeCode || employeeName || `row-${rowIdx + 1}`,
-      employee_name: employeeName || employeeCode || `Row ${rowIdx + 1}`,
+      employee_code: employeeCode,
+      employee_name: employeeName || `Row ${rowIdx + 1}`,
       father_name: colMap.fatherIdx !== -1 && row[colMap.fatherIdx] !== undefined ? String(row[colMap.fatherIdx]).trim() : "",
       unit: primaryUnit,
       godown: godown,

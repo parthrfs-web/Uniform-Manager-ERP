@@ -6,8 +6,6 @@
     <title>Uniform Manager</title>
     <link rel="stylesheet" href="./styles.css" />
     <style>
-      .text-red td { color: var(--red); font-weight: 500; }
-      .text-green td { color: var(--green); font-weight: 500; }
       .clickable { cursor: pointer; transition: background 0.2s; }
       .clickable:hover { background: #1f2b3d; }
     </style>
@@ -153,7 +151,7 @@
           <div class="panel flush">
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Employee Code</th><th>Name</th><th>Current Unit</th><th>Payroll Month</th><th>Pending Items</th><th>Est. Deduction</th></tr></thead>
+                <thead><tr><th>Employee Code</th><th>Name</th><th>Current Unit</th><th>Payroll Month</th><th>Pending Items</th><th>Total Pending Amount</th></tr></thead>
                 <tbody id="reviewStage1Rows"></tbody>
               </table>
             </div>
@@ -163,14 +161,53 @@
         <div id="reviewStage2" style="display: none;">
           <div class="toolbar">
             <button id="backToStage1Btn" class="secondary">← Back to Employees</button>
-            <h3 id="stage2Title" style="margin-left: 10px;">Item Breakdown</h3>
+            <h3 style="margin-left: 10px;">Employee Details</h3>
           </div>
-          <div class="panel flush">
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Item</th><th>Status</th><th>Issued Qty</th><th>Allowed Qty</th><th>Excess Qty</th><th>Reason</th><th>Action</th></tr></thead>
-                <tbody id="reviewStage2Rows"></tbody>
-              </table>
+          
+          <div id="reviewStage2Loading" style="display: none; text-align: center; padding: 60px 20px;">
+            <div class="spinner"></div>
+            <p style="color: var(--muted); margin-top: 16px;">Loading employee details...</p>
+          </div>
+
+          <div id="reviewStage2Content">
+            <div class="panel">
+              <div class="mini-stats" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 16px;">
+                <article><span>Employee Code</span><strong id="stg2Code">-</strong></article>
+                <article><span>Employee Name</span><strong id="stg2Name">-</strong></article>
+                <article><span>Current Unit</span><strong id="stg2Unit">-</strong></article>
+                <article><span>Payroll Month</span><strong id="stg2Month">-</strong></article>
+                <article><span>Pending Items</span><strong id="stg2Count">-</strong></article>
+                <article><span>Total Pending Amount</span><strong id="stg2Amount">-</strong></article>
+              </div>
+            </div>
+
+            <h3 style="margin: 20px 0 16px 0;">Review Items</h3>
+            <div id="reviewStage2Cards" style="display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));">
+              <!-- Cards will be injected via JS -->
+            </div>
+
+            <!-- MODULE 5F: Review Summary -->
+            <h3 style="margin: 24px 0 16px 0;">Review Summary</h3>
+            <div class="panel flush" style="padding: 18px;">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 40px;">
+                <div>
+                  <h4 style="margin: 0 0 12px 0; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 8px;">Items</h4>
+                  <div class="stat-row"><span>Pending</span><strong id="sumCountPending" class="text-amber">0</strong></div>
+                  <div class="stat-row"><span>Deducted</span><strong id="sumCountDeducted" class="text-red">0</strong></div>
+                  <div class="stat-row"><span>Waived</span><strong id="sumCountWaived" class="text-green">0</strong></div>
+                  <div class="stat-row"><span>Held</span><strong id="sumCountHeld" class="text-blue">0</strong></div>
+                </div>
+                <div>
+                  <h4 style="margin: 0 0 12px 0; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 8px;">Amounts</h4>
+                  <div class="stat-row"><span>Pending Amount</span><strong id="sumAmtPending" class="text-amber">₹0.00</strong></div>
+                  <div class="stat-row"><span>Deducted Amount</span><strong id="sumAmtDeducted" class="text-red">₹0.00</strong></div>
+                  <div class="stat-row"><span>Waived Amount</span><strong id="sumAmtWaived" class="text-green">₹0.00</strong></div>
+                  <div class="stat-row"><span>Held Amount</span><strong id="sumAmtHeld" class="text-blue">₹0.00</strong></div>
+                  <div class="stat-row" style="border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px;">
+                    <span>Grand Total</span><strong id="sumAmtTotal" style="font-size: 16px;">₹0.00</strong>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -307,6 +344,31 @@
         <footer class="modal-footer">
           <button id="commitImportBtn" class="primary" type="button">Confirm & Import</button>
         </footer>
+      </div>
+    </div>
+
+    <!-- NON-BLOCKING PROGRESS MODAL -->
+    <div id="progressModal" class="modal-backdrop">
+      <div class="modal" style="width: 460px; text-align: center;">
+        <div class="panel flush" style="margin: 0;">
+          <div style="padding: 32px 24px;">
+            <h3 style="margin: 0 0 16px; font-size: 18px;">Processing Data...</h3>
+            
+            <div style="display: flex; justify-content: space-between; font-size: 13px; color: var(--ink); font-weight: 600; margin-bottom: 8px;">
+              <span id="progressStatus" style="color: var(--muted); text-align: left;">Please wait...</span>
+              <span id="progressTime" style="color: var(--blue);">00:00</span>
+            </div>
+            
+            <div style="background: #111821; border-radius: 8px; height: 16px; overflow: hidden; border: 1px solid var(--line); margin-bottom: 8px;">
+              <div id="progressBar" style="background: var(--blue); width: 0%; height: 100%; transition: width 0.2s ease;"></div>
+            </div>
+            
+            <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 700; color: var(--ink);">
+              <span>Progress</span>
+              <span id="progressPercent">0%</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

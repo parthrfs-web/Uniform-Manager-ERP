@@ -241,13 +241,45 @@ td.reason { white-space: normal; min-width: 240px; }
   background: #e8eef7;
   color: var(--blue);
 }
+
+/* MODULE 5G: Strict Badge Styling */
 .badge.Pending { color: var(--amber); background: #342817; }
-.badge.Deduct { color: var(--red); background: #3a2027; }
+.badge.Deducted { color: var(--red); background: #3a2027; }
 .badge.Waived { color: var(--green); background: #193124; }
-.badge.OK { color: var(--green); background: #193124; }
-.badge.Excess { color: var(--red); background: #3a2027; }
-.badge.Missing, .badge.Missing.Policy { color: var(--amber); background: #342817; }
+.badge.Held { color: var(--blue); background: #152336; }
+
 .badge.low { color: var(--red); background: #3a2027; }
+
+/* Review Card Hover Effects */
+.review-card {
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.review-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  border-left-width: 6px !important;
+}
+
+/* Spinner */
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(255,255,255,0.1);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto;
+}
+@keyframes spin { 100% { transform: rotate(360deg); } }
+
+/* Utility Text Colors */
+.text-amber { color: var(--amber); }
+.text-red { color: var(--red); }
+.text-green { color: var(--green); }
+.text-blue { color: var(--blue); }
+
+.stat-row { display: flex; justify-content: space-between; margin-bottom: 8px; }
+
 .qty-cell {
   display: inline-block;
   min-width: 44px;

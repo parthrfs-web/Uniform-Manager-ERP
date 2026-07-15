@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("uniformManager", {
   chooseAndImportWorkbook: () => safeInvoke("app:chooseAndImportWorkbook"),
   previewImportSelectedSheet: (request) => safeInvoke("app:previewImportSelectedSheet", request),
   commitImport: (data) => safeInvoke("app:commitImport", data),
+  onImportProgress: (callback) => ipcRenderer.on("import-progress", (_event, data) => callback(data)),
   getReviewQueueStage1: () => safeInvoke("app:getReviewQueueStage1"),
   getReviewQueueStage2: (code) => safeInvoke("app:getReviewQueueStage2", code),
   getReviewQueueStage3: (req) => safeInvoke("app:getReviewQueueStage3", req),

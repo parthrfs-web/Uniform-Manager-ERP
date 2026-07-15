@@ -12,6 +12,13 @@ let distributionLimit = 20000;
 let pendingDistributionEdit = null;
 let currentPreviewData = null;
 let selectedReviewEmployee = null;
+let reviewSearchText = "";
+let summaryCache = [];
+let currentStage2Items = [];
+let currentEmpData = null;
+
+let progressTimer = null;
+let progressStartTime = 0;
 
 const desktopApi = window.uniformManager;
 
@@ -45,6 +52,39 @@ function toast(message) {
   el.textContent = message;
   el.classList.add("show");
   setTimeout(() => el.classList.remove("show"), 3600);
+}
+
+function formatTime(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+  const s = (totalSeconds % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+function startProgress() {
+  const modal = document.getElementById("progressModal");
+  if (modal) {
+    modal.classList.add("show");
+    document.getElementById("progressStatus").textContent = "Preparing...";
+    document.getElementById("progressBar").style.width = "0%";
+    document.getElementById("progressPercent").textContent = "0%";
+    document.getElementById("progressTime").textContent = "00:00";
+  }
+  
+  progressStartTime = Date.now();
+  if (progressTimer) clearInterval(progressTimer);
+  progressTimer = setInterval(() => {
+     const elapsed = Date.now() - progressStartTime;
+     const timeEl = document.getElementById("progressTime");
+     if (timeEl) timeEl.textContent = formatTime(elapsed);
+  }, 1000);
+}
+
+function stopProgress() {
+  if (progressTimer) clearInterval(progressTimer);
+  progressTimer = null;
+  const modal = document.getElementById("progressModal");
+  if (modal) modal.classList.remove("show");
 }
 
 function showImportError(message) {
@@ -95,18 +135,18 @@ function showReviewDecisionModal(review, status) {
   pendingReviewDecision = { review, status };
   const labels = {
     Waived: "Waive Off",
-    Hold: "Hold",
-    Deduct: "Deduct From Salary",
+    Held: "Hold",
+    Deducted: "Deduct From Salary",
   };
   const form = document.getElementById("reviewDecisionForm");
   form.reset();
   form.elements.id.value = review.id;
   form.elements.status.value = status;
   document.getElementById("reviewDecisionTitle").textContent = labels[status] || "Review Decision";
-  document.getElementById("decisionByLabel").textContent = status === "Waived" ? "Waived By" : status === "Hold" ? "Held By" : "Approved By";
+  document.getElementById("decisionByLabel").textContent = status === "Waived" ? "Waived By" : status === "Held" ? "Held By" : "Approved By";
   document.getElementById("reviewDecisionSubtitle").textContent =
     `${review.employee_code} - ${review.employee_name} | ${review.category}: ${review.reason}`;
-  form.elements.reason.required = status === "Waived" || status === "Deduct";
+  form.elements.reason.required = status === "Waived" || status === "Deducted";
   document.getElementById("reviewDecisionModal").classList.add("show");
 }
 
@@ -211,7 +251,6 @@ function render() {
   if (!state) return;
   document.getElementById("dbPath").textContent = state.dbPath || "Unknown";
   
-  // Safe Array Length checks
   document.getElementById("employeeCount").textContent = Array.isArray(state.employees) ? state.employees.length : 0;
   document.getElementById("deductionTotal").textContent = `Rs. ${(Array.isArray(state.salaryDeductions) ? state.salaryDeductions : []).reduce((sum, row) => sum + Number(row.amount || 0), 0).toFixed(2)}`;
   
@@ -404,13 +443,21 @@ function renderDeductions() {
 }
 
 function decisionButtons(row) {
-  if (row.status !== "Pending") return text(row.remarks);
+  if (row.status !== "Pending") {
+    return `
+      <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px;">
+        <div style="color: var(--muted); font-size: 13px;"><em>${text(row.remarks)}</em></div>
+        <div class="decision-buttons" style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button data-review="${row.id}" data-status="Pending" class="secondary">Cancel</button>
+        </div>
+      </div>
+    `;
+  }
   return `
-    <div class="decision-buttons">
-      <button data-review="${row.id}" data-status="Waived">Waive Off</button>
-      <button data-review="${row.id}" data-status="Hold">Hold</button>
-      <button data-review="${row.id}" data-status="Deduct">Deduct From Salary</button>
-      <button class="danger" data-delete-review="${row.id}">Delete</button>
+    <div class="decision-buttons" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto;">
+      <button data-review="${row.id}" data-status="Deducted">Deduct</button>
+      <button data-review="${row.id}" data-status="Waived">Waive</button>
+      <button data-review="${row.id}" data-status="Held">Hold</button>
     </div>
   `;
 }
@@ -419,47 +466,127 @@ async function renderReviewStage1() {
   document.getElementById("reviewStage1").style.display = "block";
   document.getElementById("reviewStage2").style.display = "none";
   document.getElementById("reviewStage3").style.display = "none";
+
+  const toolbar = document.querySelector("#reviewStage1 .toolbar");
+  if (toolbar && !document.getElementById("reviewSearchInput")) {
+    const searchInput = document.createElement("input");
+    searchInput.id = "reviewSearchInput";
+    searchInput.placeholder = "Search by Code, Name, Unit";
+    searchInput.addEventListener("input", (e) => {
+      reviewSearchText = e.target.value.toLowerCase();
+      renderReviewStage1Rows(summaryCache);
+    });
+    toolbar.appendChild(searchInput);
+  }
+
   try {
-    const summary = await window.uniformManager.getReviewQueueStage1();
-    document.getElementById("reviewStage1Rows").innerHTML = summary.map(emp => `
-      <tr class="clickable" onclick="loadReviewStage2('${escapeHtml(emp.employee_code)}', '${escapeHtml(emp.employee_name)}')">
-        <td>${text(emp.employee_code)}</td>
-        <td>${text(emp.employee_name)}</td>
-        <td>${text(emp.current_unit)}</td>
-        <td>${text(emp.payroll_month)}</td>
-        <td>${text(emp.pending_item_count)}</td>
-        <td>Rs. ${Number(emp.estimated_deduction || 0).toFixed(2)}</td>
-      </tr>
-    `).join("") || `<tr><td colspan="6" class="empty">No pending reviews.</td></tr>`;
+    summaryCache = await window.uniformManager.getReviewQueueStage1();
+    renderReviewStage1Rows(summaryCache);
   } catch (error) {
     showImportError(error.message || "Failed to load review summary.");
   }
 }
 
-async function loadReviewStage2(employeeCode, employeeName) {
-  selectedReviewEmployee = employeeCode;
+function renderReviewStage1Rows(summaryList) {
+  const filtered = summaryList.filter(emp => {
+    if (!reviewSearchText) return true;
+    const searchStr = `${text(emp.employee_code)} ${text(emp.employee_name)} ${text(emp.current_unit)}`.toLowerCase();
+    return searchStr.includes(reviewSearchText);
+  });
+
+  document.getElementById("reviewStage1Rows").innerHTML = filtered.map(emp => {
+    return `
+      <tr class="clickable" data-review-stage1-emp="${escapeHtml(emp.employee_code)}">
+        <td>${text(emp.employee_code)}</td>
+        <td>${text(emp.employee_name)}</td>
+        <td>${text(emp.current_unit)}</td>
+        <td>${text(emp.payroll_month)}</td>
+        <td>${text(emp.pending_item_count)}</td>
+        <td>₹${Number(emp.estimated_deduction || 0).toFixed(2)}</td>
+      </tr>
+    `;
+  }).join("") || `<tr><td colspan="6" class="empty">No pending reviews.</td></tr>`;
+}
+
+async function loadReviewStage2(emp) {
+  selectedReviewEmployee = emp.employee_code;
+  currentEmpData = emp;
   document.getElementById("reviewStage1").style.display = "none";
   document.getElementById("reviewStage2").style.display = "block";
   document.getElementById("reviewStage3").style.display = "none";
-  document.getElementById("stage2Title").textContent = `Item Breakdown: ${employeeCode} - ${employeeName}`;
+
+  document.getElementById("stg2Code").textContent = text(emp.employee_code);
+  document.getElementById("stg2Name").textContent = text(emp.employee_name);
+  document.getElementById("stg2Unit").textContent = text(emp.current_unit);
+  document.getElementById("stg2Month").textContent = text(emp.payroll_month);
+  document.getElementById("stg2Count").textContent = text(emp.pending_item_count);
+  document.getElementById("stg2Amount").textContent = `₹${Number(emp.estimated_deduction || 0).toFixed(2)}`;
+
+  // MODULE 5G: Loading Spinner transition
+  document.getElementById("reviewStage2Loading").style.display = "block";
+  document.getElementById("reviewStage2Content").style.display = "none";
+
   try {
-    const items = await window.uniformManager.getReviewQueueStage2(employeeCode);
-    document.getElementById("reviewStage2Rows").innerHTML = items.map(row => {
-      const isPending = row.status === 'Pending';
+    currentStage2Items = await window.uniformManager.getReviewQueueStage2(emp.employee_code);
+    
+    // MODULE 5F: Live calculation array setups
+    let counts = { Pending: 0, Deducted: 0, Waived: 0, Held: 0 };
+    let amounts = { Pending: 0, Deducted: 0, Waived: 0, Held: 0 };
+    let grandTotal = 0;
+
+    document.getElementById("reviewStage2Cards").innerHTML = currentStage2Items.map(row => {
+      const status = row.status || 'Pending';
+      const isPending = status === 'Pending';
+      
+      const qty = Number(row.excess_qty || 0);
+      const rate = Number(row.live_rate !== undefined ? row.live_rate : (row.item_cost || 0));
+      const amount = qty * rate;
+      
+      // Auto-accumulate totals per individual item logic
+      if (counts[status] !== undefined) counts[status]++;
+      if (amounts[status] !== undefined) amounts[status] += amount;
+      grandTotal += amount;
+      
+      let borderColor = 'var(--line)';
+      if (status === 'Pending') borderColor = 'var(--amber)';
+      else if (status === 'Deducted') borderColor = 'var(--red)';
+      else if (status === 'Waived') borderColor = 'var(--green)';
+      else if (status === 'Held') borderColor = 'var(--blue)';
+
       return `
-        <tr class="${isPending ? 'text-red' : 'text-green'}">
-          <td class="clickable" onclick="loadReviewStage3('${escapeHtml(employeeCode)}', '${escapeHtml(row.item_name)}')" style="text-decoration: underline;">${text(row.item_name)}</td>
-          <td>${text(row.status)}</td>
-          <td>${text(row.issued_qty)}</td>
-          <td>${text(row.allowed_qty)}</td>
-          <td>${text(row.excess_qty)}</td>
-          <td class="reason">${text(row.reason)}</td>
-          <td>${isPending ? decisionButtons(row) : ''}</td>
-        </tr>
+        <div class="panel review-card" style="margin: 0; padding: 16px; border-left: 4px solid ${borderColor}; display: flex; flex-direction: column;">
+          <h4 style="margin: 0 0 12px 0; border-bottom: 1px solid var(--line); padding-bottom: 8px;">
+            <span class="clickable" onclick="loadReviewStage3('${escapeHtml(emp.employee_code)}', '${escapeHtml(row.item_name)}')" style="text-decoration: underline;">${escapeHtml(row.item_name)}</span>
+          </h4>
+          <div style="font-size: 13px; line-height: 1.8; margin-bottom: 16px; flex-grow: 1;">
+            <div><strong>Qty :</strong> ${qty}</div>
+            <div><strong>Rate :</strong> ₹${rate.toFixed(2)}</div>
+            <div><strong>Amount :</strong> ₹${amount.toFixed(2)}</div>
+            <div><strong>Status :</strong> <span class="badge ${escapeHtml(status)}">${escapeHtml(status)}</span></div>
+            ${row.reason ? `<div class="reason" style="margin-top: 8px; color: var(--muted);">${escapeHtml(row.reason)}</div>` : ''}
+          </div>
+          ${decisionButtons(row)}
+        </div>
       `;
-    }).join("") || `<tr><td colspan="7" class="empty">No items found.</td></tr>`;
+    }).join("") || `<div class="empty" style="grid-column: 1 / -1;">No review items found.</div>`;
+
+    // Bind Auto-refreshed Totals to the UI
+    document.getElementById("sumCountPending").textContent = counts.Pending;
+    document.getElementById("sumCountDeducted").textContent = counts.Deducted;
+    document.getElementById("sumCountWaived").textContent = counts.Waived;
+    document.getElementById("sumCountHeld").textContent = counts.Held;
+
+    document.getElementById("sumAmtPending").textContent = `₹${amounts.Pending.toFixed(2)}`;
+    document.getElementById("sumAmtDeducted").textContent = `₹${amounts.Deducted.toFixed(2)}`;
+    document.getElementById("sumAmtWaived").textContent = `₹${amounts.Waived.toFixed(2)}`;
+    document.getElementById("sumAmtHeld").textContent = `₹${amounts.Held.toFixed(2)}`;
+    document.getElementById("sumAmtTotal").textContent = `₹${grandTotal.toFixed(2)}`;
+
   } catch (error) {
     showImportError(error.message || "Failed to load items.");
+  } finally {
+    document.getElementById("reviewStage2Loading").style.display = "none";
+    document.getElementById("reviewStage2Content").style.display = "block";
   }
 }
 
@@ -468,36 +595,61 @@ async function loadReviewStage3(employeeCode, itemName) {
   document.getElementById("reviewStage3").style.display = "block";
   document.getElementById("stage3Title").textContent = `History (Last 2 Years): ${itemName}`;
   try {
-    const history = await window.uniformManager.getReviewQueueStage3(employeeCode, itemName);
-    document.getElementById("reviewStage3Rows").innerHTML = history.map(row => `
-      <tr>
-        <td>${text(row.issue_date).split('T')[0]}</td>
-        <td>${text(row.month)}</td>
-        <td>${text(row.year)}</td>
-        <td>${text(row.unit)}</td>
-        <td>${text(row.issued_qty)}</td>
-        <td>${text(row.allowed_qty)}</td>
-        <td>${text(row.previous_decision)}</td>
-      </tr>
-    `).join("") || `<tr><td colspan="7" class="empty">No history found for the last 2 years.</td></tr>`;
+    const history = await window.uniformManager.getReviewQueueStage3({ code: employeeCode, item: itemName });
+    const monthNames = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+    document.getElementById("reviewStage3Rows").innerHTML = history.map(row => {
+      const monthStr = monthNames[Number(row.month)] || text(row.month);
+      return `
+        <tr>
+          <td>${text(row.issue_date).split('T')[0]}</td>
+          <td>${monthStr}</td>
+          <td>${text(row.year)}</td>
+          <td>${text(row.unit)}</td>
+          <td>${text(row.issued_qty)}</td>
+          <td>${text(row.allowed_qty)}</td>
+          <td>${text(row.previous_decision)}</td>
+        </tr>
+      `;
+    }).join("") || `<tr><td colspan="7" class="empty">No previous issue history found.</td></tr>`;
   } catch (error) {
     showImportError(error.message || "Failed to load history.");
   }
 }
 
-function renderReviews() {
+async function renderReviews() {
   if (document.getElementById("reviewStage2")?.style.display === "block" && selectedReviewEmployee) {
-    loadReviewStage2(selectedReviewEmployee, selectedReviewEmployee);
+    summaryCache = await window.uniformManager.getReviewQueueStage1();
+    let empData = summaryCache.find(e => e.employee_code === selectedReviewEmployee);
+    if (!empData && currentEmpData) {
+      empData = { ...currentEmpData, pending_item_count: 0, estimated_deduction: 0 };
+    }
+    if (empData) {
+      loadReviewStage2(empData);
+    } else {
+      selectedReviewEmployee = null;
+      currentEmpData = null;
+      renderReviewStage1();
+    }
   } else if (document.getElementById("reviewStage3")?.style.display === "block") {
     // Keep Stage 3 visible
   } else {
+    selectedReviewEmployee = null;
+    currentEmpData = null;
     renderReviewStage1();
   }
 }
 
-document.getElementById("backToStage1Btn")?.addEventListener("click", renderReviewStage1);
+document.getElementById("backToStage1Btn")?.addEventListener("click", () => {
+  selectedReviewEmployee = null;
+  currentEmpData = null;
+  renderReviewStage1();
+});
+
 document.getElementById("backToStage2Btn")?.addEventListener("click", () => {
-  if (selectedReviewEmployee) loadReviewStage2(selectedReviewEmployee, selectedReviewEmployee);
+  if (selectedReviewEmployee && currentEmpData) {
+    loadReviewStage2(currentEmpData);
+  }
 });
 
 function renderPolicies() {
@@ -620,7 +772,6 @@ async function loadState() {
   }
 }
 
-// Navigation Fix (e.preventDefault())
 document.querySelectorAll(".nav-button").forEach((button) => {
   button.addEventListener("click", (e) => {
     e.preventDefault(); 
@@ -746,21 +897,44 @@ document.getElementById("commitImportBtn")?.addEventListener("click", async () =
   try {
     setImporting(true);
     document.getElementById("commitImportBtn").disabled = true;
-    toast("Importing and tracking history...");
+    
+    document.getElementById("importPreviewModal").classList.remove("show");
+    
+    startProgress();
     
     const result = await window.uniformManager.commitImport(currentPreviewData);
-    state = result.state;
+    
+    state = await window.uniformManager.getState({ distributionLimit });
+    
+    stopProgress();
     render();
-    document.getElementById("importPreviewModal").classList.remove("show");
     currentPreviewData = null;
     toast(result.summary.duplicate ? "Duplicate import hash detected. Discarded." : "Import completed successfully.");
   } catch (error) {
+    stopProgress();
     showImportError(error.message || "Import failed.");
   } finally {
     setImporting(false);
     document.getElementById("commitImportBtn").disabled = false;
   }
 });
+
+if (window.uniformManager && window.uniformManager.onImportProgress) {
+  window.uniformManager.onImportProgress((data) => {
+    const modal = document.getElementById("progressModal");
+    if (modal && !modal.classList.contains("show")) {
+      startProgress();
+    }
+    const statusEl = document.getElementById("progressStatus");
+    if (statusEl && data.status) statusEl.textContent = data.status;
+    
+    const barEl = document.getElementById("progressBar");
+    if (barEl && data.progress !== undefined) barEl.style.width = `${data.progress}%`;
+    
+    const pctEl = document.getElementById("progressPercent");
+    if (pctEl && data.progress !== undefined) pctEl.textContent = `${Math.floor(data.progress)}%`;
+  });
+}
 
 document.getElementById("goImportBtn")?.addEventListener("click", (e) => {
   e.preventDefault();
@@ -770,14 +944,17 @@ document.getElementById("goImportBtn")?.addEventListener("click", (e) => {
 document.getElementById("recalculateReviewsBtn")?.addEventListener("click", async () => {
   if (!desktopApi) return showImportError("Works only in Desktop App.");
   try {
+    startProgress();
     const result = await window.uniformManager.recalculateReviews();
-    state = result.state;
+    state = await window.uniformManager.getState({ distributionLimit });
+    stopProgress();
     render();
     setView("review");
     toast(`Review queue recalculated: ${result.generated} pending rows.`);
   } catch (error) {
+    stopProgress();
     try {
-      state = await window.uniformManager.getState();
+      state = await window.uniformManager.getState({ distributionLimit });
       render();
     } catch (e) {}
     setView("review");
@@ -798,8 +975,12 @@ document.getElementById("policyForm")?.addEventListener("submit", async (event) 
       item_cost: form.elements.item_cost.value,
     };
     await window.uniformManager.upsertPolicy(policy);
+    
+    startProgress();
     const result = await window.uniformManager.recalculateReviews();
-    state = result.state;
+    state = await window.uniformManager.getState({ distributionLimit });
+    stopProgress();
+    
     selectedPolicyUnit = policy.unit || selectedPolicyUnit;
     setPolicyEditMode(null);
     form.reset();
@@ -807,6 +988,7 @@ document.getElementById("policyForm")?.addEventListener("submit", async (event) 
     setView("policies");
     toast(`Policy saved. Review queue recalculated: ${result.generated} pending rows.`);
   } catch (error) {
+    stopProgress();
     showImportError(error.message || "Policy save failed.");
   }
 });
@@ -833,7 +1015,8 @@ document.getElementById("itemForm")?.addEventListener("submit", async (event) =>
       minimum_stock: form.elements.minimum_stock.value,
       status: form.elements.status.value,
     };
-    state = await window.uniformManager.upsertItem(item);
+    await window.uniformManager.upsertItem(item);
+    state = await window.uniformManager.getState({ distributionLimit });
     setItemEditMode(null);
     form.reset();
     render();
@@ -863,7 +1046,8 @@ document.getElementById("employeeForm")?.addEventListener("submit", async (event
   if (!desktopApi) return showImportError("Works only in Desktop App.");
   try {
     const employee = Object.fromEntries(new FormData(event.currentTarget).entries());
-    state = await window.uniformManager.updateEmployee(employee);
+    await window.uniformManager.updateEmployee(employee);
+    state = await window.uniformManager.getState({ distributionLimit });
     render();
     hideEmployeeModal();
     toast("Employee saved.");
@@ -881,15 +1065,19 @@ document.getElementById("distributionForm")?.addEventListener("submit", async (e
     quantities[item] = Number(form.elements[item]?.value || 0);
   });
   try {
-    state = await window.uniformManager.updateDistributionRow({
+    startProgress();
+    await window.uniformManager.updateDistributionRow({
       key: distributionKey(pendingDistributionEdit),
       quantities,
     });
+    state = await window.uniformManager.getState({ distributionLimit });
+    stopProgress();
     hideDistributionModal();
     render();
     setView("issues");
     toast("Distribution row updated.");
   } catch (error) {
+    stopProgress();
     showImportError(error.message || "Distribution update failed.");
   }
 });
@@ -900,7 +1088,10 @@ document.getElementById("reviewDecisionForm")?.addEventListener("submit", async 
   try {
     const form = event.currentTarget;
     const payload = Object.fromEntries(new FormData(form).entries());
-    state = await window.uniformManager.updateReview(payload);
+    
+    await window.uniformManager.updateReview(payload);
+    state = await window.uniformManager.getState({ distributionLimit });
+    
     render();
     hideReviewDecisionModal();
     toast(`Review #${payload.id} updated.`);
@@ -917,7 +1108,7 @@ document.getElementById("resetDataBtn")?.addEventListener("click", async () => {
       toast("Reset cancelled.");
       return;
     }
-    state = result.state;
+    state = await window.uniformManager.getState({ distributionLimit });
     document.getElementById("resetAcknowledge").checked = false;
     document.getElementById("resetDataBtn").disabled = true;
     render();
@@ -929,6 +1120,14 @@ document.getElementById("resetDataBtn")?.addEventListener("click", async () => {
 });
 
 document.addEventListener("click", async (event) => {
+  const stage1Row = event.target.closest("[data-review-stage1-emp]");
+  if (stage1Row) {
+    selectedReviewEmployee = stage1Row.dataset.reviewStage1Emp;
+    const empData = summaryCache.find(e => e.employee_code === selectedReviewEmployee);
+    if (empData) loadReviewStage2(empData);
+    return;
+  }
+
   const editItemButton = event.target.closest("[data-edit-item]");
   if (editItemButton) {
     const item = state.items.find((row) => String(row.id) === editItemButton.dataset.editItem);
@@ -956,7 +1155,8 @@ document.addEventListener("click", async (event) => {
     const label = item ? `${item.item_code} - ${item.item_name}` : `#${deleteItemButton.dataset.deleteItem}`;
     if (!confirm(`Delete item ${label}?`)) return;
     try {
-      state = await window.uniformManager.deleteItem(deleteItemButton.dataset.deleteItem);
+      await window.uniformManager.deleteItem(deleteItemButton.dataset.deleteItem);
+      state = await window.uniformManager.getState({ distributionLimit });
       render();
       toast("Item deleted.");
     } catch (error) {
@@ -989,12 +1189,15 @@ document.addEventListener("click", async (event) => {
     const label = policy ? `${policy.unit} - ${policy.item_name}` : `#${deletePolicyButton.dataset.deletePolicy}`;
     if (!confirm(`Delete policy ${label}?`)) return;
     try {
-      state = await window.uniformManager.deletePolicy(deletePolicyButton.dataset.deletePolicy);
+      await window.uniformManager.deletePolicy(deletePolicyButton.dataset.deletePolicy);
+      startProgress();
       const result = await window.uniformManager.recalculateReviews();
-      state = result.state;
+      state = await window.uniformManager.getState({ distributionLimit });
+      stopProgress();
       render();
       toast(`Policy deleted. Review queue recalculated: ${result.generated} pending rows.`);
     } catch (error) {
+      stopProgress();
       showImportError(error.message || "Policy delete failed.");
     }
     return;
@@ -1037,7 +1240,8 @@ document.addEventListener("click", async (event) => {
     const label = employee ? `${employee.employee_code} - ${employee.employee_name}` : employeeCode;
     if (!confirm(`Delete employee ${label}?\n\nThis will remove the employee from master data and review queue.`)) return;
     try {
-      state = await window.uniformManager.deleteEmployee(employeeCode);
+      await window.uniformManager.deleteEmployee(employeeCode);
+      state = await window.uniformManager.getState({ distributionLimit });
       render();
       toast("Employee deleted.");
     } catch (error) {
@@ -1060,8 +1264,26 @@ document.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-review]");
   if (button) {
     if (!desktopApi) return showImportError("Desktop app required.");
-    const review = state.reviews.find((row) => String(row.id) === String(button.dataset.review));
-    if (review) showReviewDecisionModal(review, button.dataset.status);
+    
+    const reviewId = String(button.dataset.review);
+    const status = button.dataset.status;
+    
+    const review = (currentStage2Items || []).find((row) => String(row.id) === reviewId) 
+                || (state?.reviews || []).find((row) => String(row.id) === reviewId);
+    
+    if (review) {
+        if (status === "Pending") {
+            window.uniformManager.updateReview({ id: review.id, status: "Pending" })
+              .then(async () => {
+                  state = await window.uniformManager.getState({ distributionLimit });
+                  render(); 
+                  toast("Review reverted to Pending.");
+              })
+              .catch(err => showImportError(err.message));
+        } else {
+            showReviewDecisionModal(review, status);
+        }
+    }
     return;
   }
 
@@ -1071,7 +1293,8 @@ document.addEventListener("click", async (event) => {
     const label = review ? `#${review.id} ${review.employee_code} - ${review.employee_name}` : `#${deleteReviewButton.dataset.deleteReview}`;
     if (!confirm(`Delete review queue entry ${label}?`)) return;
     try {
-      state = await window.uniformManager.deleteReview(deleteReviewButton.dataset.deleteReview);
+      await window.uniformManager.deleteReview(deleteReviewButton.dataset.deleteReview);
+      state = await window.uniformManager.getState({ distributionLimit });
       render();
       toast("Review queue entry deleted.");
     } catch (error) {
@@ -1094,11 +1317,15 @@ document.addEventListener("click", async (event) => {
     const label = `${row.employee_code} - ${row.employee_name} (${row.issue_period_label || "No period"})`;
     if (!confirm(`Delete distribution row ${label}?\n\nThis removes that employee/month distribution entry and recalculates review queue.`)) return;
     try {
-      state = await window.uniformManager.deleteDistributionRow(distributionKey(row));
+      startProgress();
+      await window.uniformManager.deleteDistributionRow(distributionKey(row));
+      state = await window.uniformManager.getState({ distributionLimit });
+      stopProgress();
       render();
       setView("issues");
       toast("Distribution row deleted.");
     } catch (error) {
+      stopProgress();
       showImportError(error.message || "Distribution row delete failed.");
     }
   }
