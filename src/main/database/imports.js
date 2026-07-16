@@ -91,10 +91,13 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       return created;
     },
     evaluateEntitlementsForImport(importId, progressCallback) {
-      const importedIssues = all("SELECT * FROM uniform_issues WHERE import_id = ? AND quantity > 0", [Number(importId)]);
+      // Allow importId = null to process the entire database in one pass
+      const importedIssues = importId 
+        ? all("SELECT * FROM uniform_issues WHERE import_id = ? AND quantity > 0", [Number(importId)])
+        : all("SELECT * FROM uniform_issues WHERE quantity > 0");
+        
       if (!importedIssues.length) return 0;
 
-      // DEBUG: Setup trackers for Rajjan Kumar
       let rajjanDistRows = 0;
       let rajjanIssues = 0;
       let rajjanReviews = 0;
@@ -121,7 +124,11 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       let processed = 0;
       const total = importedIssues.length;
 
+      // ==========================================
+      // RESTORED: issueKey and helpers
+      // ==========================================
       const issueKey = (issue) => issue.id || `${issue.import_id}:${issue.source_sheet}:${issue.source_row}:${issue.employee_code}:${issue.item_name}`;
+      
       const logReviewGeneration = (issue, created, note = "") => {
         console.log(
           `[ReviewGeneration] Issue ID=${issue.id || "-"} | Employee Code=${issue.employee_code || "-"} | ` +
@@ -129,6 +136,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           `Distribution Row ID=${issue.source_row || "-"} | Review Created=${created ? "YES" : "NO"}${note ? ` | ${note}` : ""}`
         );
       };
+      
       const queueReview = (issue, reviewRow) => {
         const key = issueKey(issue);
         if (generatedIssueIds.has(key)) {
@@ -140,16 +148,19 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         logReviewGeneration(issue, true);
         return true;
       };
+      // ==========================================
 
       for (const issue of importedIssues) {
         const sourceIssueKey = issueKey(issue);
         if (processedIssueIds.has(sourceIssueKey)) {
-          logReviewGeneration(issue, false, "Source issue was encountered twice before review generation");
           continue;
         }
         processedIssueIds.add(sourceIssueKey);
 
-        const periodKey = issue.issue_period_label || `${issue.issue_month || ""}/${issue.issue_year || ""}`;
+        // Group evaluations purely by year
+        const periodKey = issue.issue_year 
+            ? `year:${issue.issue_year}` 
+            : `label:${issue.issue_period_label || ""}`;
         
         const key = `${issue.employee_code}|${issue.unit}|${issue.item_name}|${periodKey}`.toLowerCase();
         
@@ -157,26 +168,29 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         checked.add(key);
 
         const policy = policyByUnitItem.get(`${String(issue.unit).toLowerCase()}|${String(issue.item_name).toLowerCase()}`);
-        
         const isRajjan = String(issue.employee_name || "").toLowerCase().includes("rajjan") || String(issue.employee_code) === "Rajjan Kumar";
 
         if (!policy) {
+          let periodSql = "";
+          const params = [issue.employee_code, issue.item_name, issue.unit || ""];
+          
+          if (issue.issue_year) {
+              periodSql = " AND issue_year = ?";
+              params.push(issue.issue_year);
+          } else if (issue.issue_period_label) {
+              periodSql = " AND lower(COALESCE(issue_period_label, '')) = lower(?)";
+              params.push(issue.issue_period_label);
+          }
+          
+          if (importId) params.push(Number(importId));
+
           const importedQuantity = scalar(
             `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
-             WHERE import_id = ? AND employee_code = ? AND lower(item_name) = lower(?)
+             WHERE employee_code = ? AND lower(item_name) = lower(?)
                AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-               AND lower(COALESCE(issue_period_label, '')) = lower(COALESCE(?, ''))
-               AND COALESCE(issue_month, 0) = COALESCE(?, 0)
-               AND COALESCE(issue_year, 0) = COALESCE(?, 0)`,
-            [
-              Number(importId),
-              issue.employee_code,
-              issue.item_name,
-              issue.unit || "",
-              issue.issue_period_label || "",
-              issue.issue_month || 0,
-              issue.issue_year || 0,
-            ]
+               ${periodSql}
+               ${importId ? "AND import_id = ?" : ""}`,
+            params
           );
 
           const created = queueReview(issue, {
@@ -258,7 +272,6 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         }
       }
 
-      // Output debug logs for Rajjan Kumar tracking
       if (rajjanDistRows > 0) {
           console.log(`\nEmployee: Rajjan Kumar`);
           console.log(`Distribution rows found: ${rajjanDistRows}`);
@@ -273,18 +286,16 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       }
       return reviewRows.length;
     },
+    
     recalculateReviews(onProgress) {
-      const imports = all("SELECT id FROM imports ORDER BY id ASC");
-      let generated = 0;
-      
       // CLEAR all old generated Pending reviews explicitly to prevent duplication creep
       db.run("DELETE FROM review_queue WHERE status = 'Pending'");
       
-      for (let i = 0; i < imports.length; i++) {
-         generated += this.evaluateEntitlementsForImport(imports[i].id, (processed, total) => {
-             if (onProgress) onProgress(imports[i].id, i + 1, imports.length, processed, total);
-         });
-      }
+      // FIX: Do NOT loop over imports. Evaluate the entire uniform_issues table in a single definitive pass.
+      const generated = this.evaluateEntitlementsForImport(null, (processed, total) => {
+          if (onProgress) onProgress(null, 1, 1, processed, total);
+      });
+
       audit("Review Queue Recalculated", `${generated} pending review rows generated from current policies.`);
       save();
       return generated;
