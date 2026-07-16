@@ -20,6 +20,7 @@
         </div>
       </div>
       <nav>
+        <button class="nav-button" data-view="reports">Reports / Export</button>
         <button class="nav-button active" data-view="dashboard">Dashboard</button>
         <button class="nav-button" data-view="import">Import Excel</button>
         <button class="nav-button" data-view="employees">Employees</button>
@@ -104,6 +105,7 @@
             <div class="row-actions">
               <button id="loadMoreDistributionBtn" type="button">Load More</button>
               <button id="loadAllDistributionBtn" type="button">Load All</button>
+              <button class="secondary" data-export="history">Export Excel</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -145,8 +147,9 @@
 
       <section class="view" id="review">
         <div id="reviewStage1">
-          <div class="toolbar">
+          <div class="toolbar" style="display: flex; justify-content: space-between;">
             <button id="recalculateReviewsBtn" class="secondary" type="button">Recalculate Reviews</button>
+            <button class="secondary" data-export="pendingReview">Export Excel</button>
           </div>
           <div class="panel flush">
             <div class="table-wrap">
@@ -183,10 +186,8 @@
 
             <h3 style="margin: 20px 0 16px 0;">Review Items</h3>
             <div id="reviewStage2Cards" style="display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));">
-              <!-- Cards will be injected via JS -->
             </div>
 
-            <!-- MODULE 5F: Review Summary -->
             <h3 style="margin: 24px 0 16px 0;">Review Summary</h3>
             <div class="panel flush" style="padding: 18px;">
               <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 40px;">
@@ -230,19 +231,37 @@
 
       <section class="view" id="deductions">
         <div class="panel">
-          <h3>Salary Deduction History</h3>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 style="margin: 0;">Salary Deduction Register</h3>
+            <button class="secondary" data-export="salaryDeduction">Export Excel</button>
+          </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Date</th><th>Employee Code</th><th>Employee Name</th><th>Unit</th><th>Period</th><th>Total Amount</th><th>Reason</th><th>Report</th></tr></thead>
+              <thead><tr><th>Date</th><th>Code</th><th>Name</th><th>Unit</th><th>Item</th><th>Qty</th><th>Rate</th><th>Amount</th><th>Month</th><th>Status</th><th>Report</th></tr></thead>
               <tbody id="deductionRows"></tbody>
             </table>
           </div>
         </div>
         <div class="panel">
-          <h3>Waive Records</h3>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 style="margin: 0;">Hold Register</h3>
+            <button class="secondary" data-export="hold">Export Excel</button>
+          </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Date</th><th>Review</th><th>Code</th><th>Name</th><th>Unit</th><th>Remarks</th><th>Reason</th></tr></thead>
+              <thead><tr><th>Date</th><th>Code</th><th>Name</th><th>Unit</th><th>Item</th><th>Qty</th><th>Reason</th><th>Actions</th></tr></thead>
+              <tbody id="holdRows"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 style="margin: 0;">Waived Register</h3>
+            <button class="secondary" data-export="waive">Export Excel</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Date</th><th>Code</th><th>Name</th><th>Unit</th><th>Item</th><th>Reason</th><th>Remarks</th></tr></thead>
               <tbody id="waiveRows"></tbody>
             </table>
           </div>
@@ -315,6 +334,23 @@
           </div>
         </div>
       </section>
+
+      <section class="view" id="reports">
+        <div class="panel">
+          <h3>Master Excel Reports</h3>
+          <p class="empty" style="margin-bottom: 20px;">Export fully formatted .xlsx files containing live business data. No PDFs, just pure spreadsheet data.</p>
+          
+          <div style="display: grid; gap: 12px; max-width: 400px;">
+            <button class="primary" data-export="salaryDeduction">⬇ Salary Deduction Register</button>
+            <button class="primary" data-export="pendingReview">⬇ Pending Review Register</button>
+            <button class="primary" data-export="hold">⬇ Hold Register</button>
+            <button class="primary" data-export="waive">⬇ Waive Register</button>
+            <button class="primary" data-export="history">⬇ Employee Complete History</button>
+            <button class="primary" data-export="unitSummary">⬇ Unit Summary Report</button>
+            <button class="primary" data-export="itemSummary">⬇ Item Summary Report</button>
+          </div>
+        </div>
+      </section>
     </main>
 
     <div id="importPreviewModal" class="modal-backdrop">
@@ -347,7 +383,6 @@
       </div>
     </div>
 
-    <!-- NON-BLOCKING PROGRESS MODAL -->
     <div id="progressModal" class="modal-backdrop">
       <div class="modal" style="width: 460px; text-align: center;">
         <div class="panel flush" style="margin: 0;">
@@ -464,6 +499,7 @@
     <script src="./reviews/reviewQueue.js"></script>
     <script src="./payroll/payroll.js"></script>
     <script src="./import/import.js"></script>
+    <script src="./reports/export.js"></script>
     <script src="./boot.js"></script>
   </body>
 </html>

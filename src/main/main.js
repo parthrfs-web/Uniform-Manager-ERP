@@ -2,6 +2,7 @@ const path = require("path");
 const { fork } = require("child_process");
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { createDatabase } = require("./database/database");
+const { exportToExcel } = require('./services/export-engine');
 
 let db;
 let pendingImportCache = null; 
@@ -329,3 +330,13 @@ ipcMain.handle("app:resetOperationalData", () => handleSafe(async () => {
   if (result.response !== 1) return { canceled: true, state: db.getState() };
   db.resetOperationalData(); return { canceled: false, state: db.getState() };
 }));
+
+ipcMain.handle("app:exportExcel", async (event, config) => {
+    try {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const result = await exportToExcel(win, config);
+        return { ok: true, data: result };
+    } catch (error) {
+        return { ok: false, error: error.message };
+    }
+});

@@ -33,4 +33,6 @@ contextBridge.exposeInMainWorld("uniformManager", {
   updateEmployee: (employee) => safeInvoke("app:updateEmployee", employee),
   deleteEmployee: (employeeCode) => safeInvoke("app:deleteEmployee", employeeCode),
   resetOperationalData: () => safeInvoke("app:resetOperationalData"),
+  // Add this line inside the exposeInMainWorld block:
+  exportExcel: (config) => safeInvoke("app:exportExcel", config),
 });

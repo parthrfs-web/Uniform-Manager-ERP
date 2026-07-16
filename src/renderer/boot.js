@@ -1,5 +1,6 @@
 const views = {
   dashboard: ["Dashboard", "Import distribution data and review excess uniform cases."],
+  reports: ["Reports / Export", "Export exact business data to Microsoft Excel."],
   import: ["Import Excel", "Inspect workbook sheets before importing distribution data."],
   employees: ["Employees", "Search and review imported employee records."],
   issues: ["Distribution Register", "Employee-wise uniform quantity matrix."],

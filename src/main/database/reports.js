@@ -121,8 +121,9 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         policies,
         items: all("SELECT *, CASE WHEN available_stock <= minimum_stock THEN 1 ELSE 0 END AS is_low_stock FROM uniform_items ORDER BY item_name, size"),
         stockMovements: all("SELECT * FROM stock_movements ORDER BY created_at DESC, id DESC LIMIT 100"),
-        salaryDeductions: all("SELECT * FROM salary_deductions ORDER BY created_at DESC, id DESC"),
-        waiveRecords: all("SELECT * FROM waive_records ORDER BY created_at DESC, id DESC"),
+        salaryDeductions: all("SELECT s.*, r.item_name, r.excess_qty, r.item_cost, r.issued_qty FROM salary_deductions s LEFT JOIN review_queue r ON s.review_id = r.id ORDER BY s.created_at DESC, s.id DESC"),
+        waiveRecords: all("SELECT w.*, r.item_name FROM waive_records w LEFT JOIN review_queue r ON w.review_id = r.id ORDER BY w.created_at DESC, w.id DESC"),
+        holdRecords: all("SELECT * FROM review_queue WHERE status IN ('Held', 'Hold') ORDER BY decided_at DESC, id DESC"),
         reviewDecisions: all("SELECT * FROM review_decisions ORDER BY created_at DESC, id DESC LIMIT 200"),
         recoveryRecords: all("SELECT * FROM recovery_records ORDER BY created_at DESC, id DESC"),
         uniformIssueMatrix: {
