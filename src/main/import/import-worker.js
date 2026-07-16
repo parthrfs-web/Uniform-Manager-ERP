@@ -2,6 +2,7 @@ const { inspectWorkbook, parseCandidate } = require("./smart-importer");
 
 process.on("message", (message) => {
   if (!message || typeof message !== 'object') return;
+  console.log("Worker started", message.type || "");
 
   try {
     if (message.type === "inspect-workbook") {

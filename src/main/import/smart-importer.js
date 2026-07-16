@@ -70,6 +70,22 @@ function isSkipRow(row) {
   return false;
 }
 
+function isSummaryContextValue(value) {
+  const text = norm(value);
+  if (!text) return false;
+  return [
+    "summary",
+    "prv",
+    "previous",
+    "prev",
+    "deduction",
+    "salary",
+    "payroll",
+    "recovery",
+    "waive",
+  ].some((pattern) => text.includes(pattern));
+}
+
 function parseQuantity(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   if (value === null || value === undefined) return 0;
@@ -182,6 +198,15 @@ function detectSheetPeriod(rows, headerRowIdx) {
   return { issue_month: null, issue_year: null, issue_period_label: "" };
 }
 
+function detectRowPeriod(row) {
+  const safeRow = Array.isArray(row) ? row : [];
+  for (const cell of safeRow) {
+    const period = parseIssuePeriod(cell);
+    if (period.issue_period_label && (period.issue_month || period.issue_year)) return period;
+  }
+  return { issue_month: null, issue_year: null, issue_period_label: "" };
+}
+
 function getRows(sheet, limit = 10000) {
   if (!sheet) return [];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", blankrows: false });
@@ -260,9 +285,14 @@ function parseSheet(sheet, sheetName) {
     return { sheetName, rows: [], header: { ...header, colMap }, parsedRows: [], skipped: 0, info: `${sheetName} (no identity columns)`, score: 0 };
   }
 
+  if (!colMap.itemCols.length) {
+    return { sheetName, rows: [], header: { ...header, colMap }, parsedRows: [], skipped: 0, info: `${sheetName} (no uniform item columns)`, score: 0 };
+  }
+
   const parsedRows = [];
   let skipped = 0;
   let totalIssuesCount = 0;
+  let currentSectionPeriod = sheetPeriod;
 
   for (let rowIdx = header.rowIdx + 1; rowIdx < rows.length; rowIdx += 1) {
     const row = rows[rowIdx];
@@ -271,6 +301,11 @@ function parseSheet(sheet, sheetName) {
 
     let employeeCode = colMap.empCodeIdx !== -1 && row[colMap.empCodeIdx] !== undefined ? String(row[colMap.empCodeIdx]).trim() : "";
     const employeeName = colMap.empNameIdx !== -1 && row[colMap.empNameIdx] !== undefined ? String(row[colMap.empNameIdx]).trim() : "";
+    const rowPeriod = detectRowPeriod(row);
+    if (rowPeriod.issue_period_label && (!employeeName || !employeeCode)) {
+      currentSectionPeriod = rowPeriod;
+      continue;
+    }
     
     // Agar dono code aur name blank hain, toh strictly skip kardo
     if (!employeeCode && !employeeName) continue;
@@ -289,19 +324,20 @@ function parseSheet(sheet, sheetName) {
 
     const primaryUnit = colMap.unitIdx !== -1 && row[colMap.unitIdx] !== undefined ? String(row[colMap.unitIdx]).trim() : "";
     const godown = colMap.godownIdx !== -1 && row[colMap.godownIdx] !== undefined ? String(row[colMap.godownIdx]).trim() : "";
+    if (isSummaryContextValue(primaryUnit) || isSummaryContextValue(godown)) continue;
     
     const rawMonth = colMap.monthIdx !== -1 ? row[colMap.monthIdx] : "";
     const rawDate = colMap.dateIdx !== -1 ? row[colMap.dateIdx] : "";
     
     let issuePeriod = {};
     if (rawMonth || rawDate) {
-      const monthPeriod = parseIssuePeriod(rawMonth, {});
-      const datePeriod = parseIssuePeriod(rawDate, {});
+      const monthPeriod = parseIssuePeriod(rawMonth, currentSectionPeriod);
+      const datePeriod = parseIssuePeriod(rawDate, currentSectionPeriod);
       issuePeriod = monthPeriod.issue_period_label ? monthPeriod : datePeriod;
     }
 
     if (!issuePeriod.issue_period_label) {
-      issuePeriod = sheetPeriod;
+      issuePeriod = currentSectionPeriod;
     }
 
     const worksheetRow = {
@@ -458,7 +494,9 @@ function parseCandidate(filePath, selectedSheetName = null) {
     );
   }
 
-  return buildParsedImport(filePath, detected);
+  const parsed = buildParsedImport(filePath, detected);
+  console.log("Workbook parsed");
+  return parsed;
 }
 
 function inspectWorkbook(filePath) {
@@ -482,4 +520,149 @@ function inspectWorkbook(filePath) {
   };
 }
 
-module.exports = { parseCandidate, inspectWorkbook };
+function buildValidatedImport(parsed) {
+  const validEmployees = [];
+  const validIssues = [];
+  const validationErrors = [];
+  const reviews = [];
+  let validWorksheetRows = 0;
+  let invalidWorksheetRows = 0;
+  let duplicateWorksheetRows = 0;
+  let generatedIssues = 0;
+
+  const worksheetRows = Array.isArray(parsed.worksheetRows) ? parsed.worksheetRows : [];
+  for (const row of worksheetRows) {
+    let error = null;
+
+    if (!row.employee_code) error = "Employee Code missing";
+    else if (!row.employee_name) error = "Employee Name missing";
+
+    if (error) {
+      validationErrors.push({
+        row: row.source_row || "-",
+        employee_code: row.employee_code || "-",
+        employee_name: row.employee_name || "-",
+        reason: error,
+      });
+      invalidWorksheetRows += 1;
+      continue;
+    }
+
+    const rowIssues = [];
+    const items = Array.isArray(row.items) ? row.items : [];
+    for (const item of items) {
+      rowIssues.push({
+        employee_code: row.employee_code,
+        employee_name: row.employee_name,
+        unit: row.unit,
+        godown: row.godown,
+        item_name: item.itemName,
+        quantity: item.quantity,
+        issue_month: row.issue_month,
+        issue_year: row.issue_year,
+        issue_period_label: row.issue_period_label,
+        source_sheet: parsed.summary.selectedSheet,
+        source_row: row.source_row,
+      });
+    }
+
+    if (items.length > 0 && rowIssues.length === 0) {
+      duplicateWorksheetRows += 1;
+      validationErrors.push({
+        row: row.source_row || "-",
+        employee_code: row.employee_code,
+        employee_name: row.employee_name,
+        reason: "Duplicate Distribution",
+      });
+      continue;
+    }
+
+    validWorksheetRows += 1;
+    validEmployees.push({
+      employee_code: row.employee_code,
+      employee_name: row.employee_name,
+      father_name: row.father_name,
+      unit: row.unit,
+      godown: row.godown,
+      mobile_number: row.mobile_number,
+      designation: row.designation,
+      status: "Active",
+    });
+
+    if (!row.unit) {
+      reviews.push({
+        employee_code: row.employee_code,
+        employee_name: row.employee_name,
+        unit: "",
+        reason: "Unit Missing",
+      });
+    }
+
+    validIssues.push(...rowIssues);
+    generatedIssues += rowIssues.length;
+  }
+
+  return {
+    validEmployees,
+    validIssues,
+    validationErrors,
+    reviews,
+    stats: {
+      totalWorksheetRows: worksheetRows.length,
+      validWorksheetRows,
+      invalidWorksheetRows,
+      duplicateWorksheetRows,
+      generatedIssues,
+    },
+  };
+}
+
+function importWorkbook(filePath, db) {
+  const start = Date.now();
+  const parsed = parseCandidate(filePath);
+  const validated = buildValidatedImport(parsed);
+  const summary = {
+    ...parsed.summary,
+    ...validated.stats,
+  };
+
+  if (summary.importHash && typeof db.hasImportHash === "function" && db.hasImportHash(summary.importHash)) {
+    return {
+      ...summary,
+      duplicate: true,
+      inserted: 0,
+      updated: 0,
+      skipped: summary.totalWorksheetRows || summary.totalRows || 0,
+    };
+  }
+
+  const employeeResult = db.bulkUpsertEmployees(validated.validEmployees);
+  summary.inserted = employeeResult.inserted || 0;
+  summary.updated = employeeResult.updated || 0;
+
+  if (validated.reviews.length && typeof db.bulkCreateReviews === "function") {
+    db.bulkCreateReviews(validated.reviews);
+  }
+
+  const importId = db.recordImport(summary);
+  db.bulkCreateUniformIssues(validated.validIssues, importId);
+
+  if (typeof db.ensureDefaultPoliciesForImport === "function") {
+    db.ensureDefaultPoliciesForImport(importId);
+  }
+
+  if (typeof db.evaluateEntitlementsForImport === "function") {
+    const generatedReviews = db.evaluateEntitlementsForImport(importId);
+    summary.generatedReviews = Number(generatedReviews || 0);
+    if (typeof db.updateImportReviewsCount === "function") {
+      db.updateImportReviewsCount(importId, summary.generatedReviews);
+    }
+  }
+
+  summary.durationMs = Date.now() - start;
+  summary.failedCount = validated.validationErrors.length;
+  summary.duplicateCount = summary.duplicateWorksheetRows || 0;
+  return summary;
+}
+
+module.exports = { parseCandidate, inspectWorkbook, importWorkbook };

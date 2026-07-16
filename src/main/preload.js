@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const safeInvoke = async (channel, ...args) => {
+  if (channel === "app:chooseAndImportWorkbook" || channel === "app:previewImportSelectedSheet" || channel === "app:commitImport") {
+    console.log("IPC sent", channel);
+  }
   const result = await ipcRenderer.invoke(channel, ...args);
   if (result && !result.ok) {
     throw new Error(result.error || "IPC communication failed");

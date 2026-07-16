@@ -2,8 +2,8 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const XLSX = require("xlsx");
-const { createDatabase } = require("../src/main/services/database");
-const { importWorkbook, inspectWorkbook } = require("../src/main/services/smart-importer");
+const { createDatabase } = require("../src/main/database/database");
+const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-importer");
 
 (async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "uniform-manager-test-"));

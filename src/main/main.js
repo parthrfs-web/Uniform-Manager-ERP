@@ -1,7 +1,7 @@
 const path = require("path");
 const { fork } = require("child_process");
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
-const { createDatabase } = require("./services/database");
+const { createDatabase } = require("./database/database");
 
 let db;
 let pendingImportCache = null; 
@@ -48,7 +48,7 @@ ipcMain.handle("app:getState", (_event, options = {}) => handleSafe(() => db.get
 
 function runImportWorker(message) {
   return new Promise((resolve, reject) => {
-    const worker = fork(path.join(__dirname, "services/import-worker.js"), [], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    const worker = fork(path.join(__dirname, "import/import-worker.js"), [], { stdio: ["ignore", "inherit", "inherit", "ipc"] });
     const timeout = setTimeout(() => { worker.kill(); reject(new Error("Import timed out.")); }, 900000);
     
     worker.once("message", (msg) => { 
@@ -65,6 +65,7 @@ function runImportWorker(message) {
 }
 
 ipcMain.handle("app:chooseAndImportWorkbook", () => handleSafe(async () => {
+  console.log("Import IPC received");
   const result = await dialog.showOpenDialog({
     title: "Import Employee Master",
     filters: [{ name: "Excel Workbooks", extensions: ["xlsx", "xls", "xlsm", "xlsb", "csv"] }],
@@ -83,6 +84,7 @@ ipcMain.handle("app:chooseAndImportWorkbook", () => handleSafe(async () => {
 }));
 
 ipcMain.handle("app:previewImportSelectedSheet", (_event, request) => handleSafe(async () => {
+  console.log("Import preview IPC received");
   const start = Date.now();
   const parsedRaw = await runImportWorker({ type: "parse-workbook", filePath: request.filePath, sheetName: request.sheetName });
 
@@ -106,9 +108,6 @@ ipcMain.handle("app:previewImportSelectedSheet", (_event, request) => handleSafe
     
     if (!row.employee_code) error = "Employee Code missing";
     else if (!row.employee_name) error = "Employee Name missing";
-    else if (row.items && row.items.length > 0 && !row.issue_month && !row.issue_period_label) {
-      error = "Distribution Date missing";
-    }
 
     if (error) {
       validationErrors.push({ row: row.source_row || "-", employee_code: row.employee_code || "-", employee_name: row.employee_name || "-", reason: error });
@@ -173,6 +172,7 @@ ipcMain.handle("app:previewImportSelectedSheet", (_event, request) => handleSafe
 }));
 
 ipcMain.handle("app:commitImport", async (event) => {
+  console.log("Import commit IPC received");
   try {
     const result = await (async () => {
       await yieldEventLoop();
@@ -265,6 +265,7 @@ ipcMain.handle("app:commitImport", async (event) => {
       safeData.summary.durationMs = (safeData.durationMs || 0) + (Date.now() - start);
       safeData.summary.failedCount = safeData.validationErrors.length;
       safeData.summary.duplicateCount = safeData.summary.duplicateWorksheetRows || 0;
+      console.log("Import committed");
 
       pendingImportCache = null;
       event.sender.send("import-progress", { progress: 100, status: "Complete!" });

@@ -1,8 +1,8 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { createDatabase } = require("../src/main/services/database");
-const { importWorkbook } = require("../src/main/services/smart-importer");
+const { createDatabase } = require("../src/main/database/database");
+const { importWorkbook } = require("../src/main/import/smart-importer");
 
 (async () => {
   const workbookPath = process.argv[2];
