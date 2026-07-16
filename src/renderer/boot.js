@@ -1,10 +1,9 @@
 const views = {
   dashboard: ["Dashboard", "Import distribution data and review excess uniform cases."],
-  reports: ["Reports / Export", "Export exact business data to Microsoft Excel."],
   import: ["Import Excel", "Inspect workbook sheets before importing distribution data."],
   employees: ["Employees", "Search and review imported employee records."],
   issues: ["Distribution Register", "Employee-wise uniform quantity matrix."],
-  deductions: ["Salary Deductions", "Payroll deduction and waive records created from review decisions."],
+  deductions: ["Reports", "Payroll deduction and waive records created from review decisions."],
   review: ["Review Queue", "Resolve records that need office staff attention."],
   policies: ["Unit Entitlements", "Set allowed uniform quantity for each unit/company and item."],
   reset: ["Reset Data", "Clear imported operational data only after confirmation."],

@@ -20,14 +20,13 @@
         </div>
       </div>
       <nav>
-        <button class="nav-button" data-view="reports">Reports / Export</button>
         <button class="nav-button active" data-view="dashboard">Dashboard</button>
         <button class="nav-button" data-view="import">Import Excel</button>
         <button class="nav-button" data-view="employees">Employees</button>
         <button class="nav-button" data-view="issues">Distribution Register</button>
         <button class="nav-button" data-view="policies">Unit Entitlements</button>
         <button class="nav-button" data-view="review">Review Queue</button>
-        <button class="nav-button" data-view="deductions">Salary Deductions</button>
+        <button class="nav-button" data-view="deductions">Reports</button>
         <button class="nav-button danger-nav" data-view="reset">Reset Data</button>
       </nav>
       <div class="db-box">
@@ -339,22 +338,6 @@
         </div>
       </section>
 
-      <section class="view" id="reports">
-        <div class="panel">
-          <h3>Master Excel Reports</h3>
-          <p class="empty" style="margin-bottom: 20px;">Export fully formatted .xlsx files containing live business data. No PDFs, just pure spreadsheet data.</p>
-          
-          <div style="display: grid; gap: 12px; max-width: 400px;">
-            <button class="primary" data-export="salaryDeduction">⬇ Salary Deduction Register</button>
-            <button class="primary" data-export="pendingReview">⬇ Pending Review Register</button>
-            <button class="primary" data-export="hold">⬇ Hold Register</button>
-            <button class="primary" data-export="waive">⬇ Waive Register</button>
-            <button class="primary" data-export="history">⬇ Employee Complete History</button>
-            <button class="primary" data-export="unitSummary">⬇ Unit Summary Report</button>
-            <button class="primary" data-export="itemSummary">⬇ Item Summary Report</button>
-          </div>
-        </div>
-      </section>
     </main>
 
     <div id="importPreviewModal" class="modal-backdrop">
@@ -503,7 +486,6 @@
     <script src="./reviews/reviewQueue.js"></script>
     <script src="./payroll/payroll.js"></script>
     <script src="./import/import.js"></script>
-    <script src="./reports/export.js"></script>
     <script src="./boot.js"></script>
   </body>
 </html>
