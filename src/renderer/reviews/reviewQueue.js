@@ -102,18 +102,17 @@ async function loadReviewStage2(emp) {
   document.getElementById("stg2Count").textContent = text(emp.pending_item_count);
   document.getElementById("stg2Amount").textContent = `₹${Number(emp.estimated_deduction || 0).toFixed(2)}`;
 
-  // MODULE 5G: Loading Spinner transition
   document.getElementById("reviewStage2Loading").style.display = "block";
   document.getElementById("reviewStage2Content").style.display = "none";
 
   try {
     currentStage2Items = await window.uniformManager.getReviewQueueStage2(emp.employee_code);
     
-    // MODULE 5F: Live calculation array setups
     let counts = { Pending: 0, Deducted: 0, Waived: 0, Held: 0 };
     let amounts = { Pending: 0, Deducted: 0, Waived: 0, Held: 0 };
     let grandTotal = 0;
 
+    // ISSUE 3 FIX: Card distinctly renders Employee details, Issue/Allowed Matrix, and clear spacing
     document.getElementById("reviewStage2Cards").innerHTML = currentStage2Items.map(row => {
       const status = row.status || 'Pending';
       const isPending = status === 'Pending';
@@ -122,7 +121,6 @@ async function loadReviewStage2(emp) {
       const rate = Number(row.live_rate !== undefined ? row.live_rate : (row.item_cost || 0));
       const amount = qty * rate;
       
-      // Auto-accumulate totals per individual item logic
       if (counts[status] !== undefined) counts[status]++;
       if (amounts[status] !== undefined) amounts[status] += amount;
       grandTotal += amount;
@@ -139,9 +137,18 @@ async function loadReviewStage2(emp) {
             <span class="clickable" onclick="loadReviewStage3('${escapeHtml(emp.employee_code)}', '${escapeHtml(row.item_name)}')" style="text-decoration: underline;">${escapeHtml(row.item_name)}</span>
           </h4>
           <div style="font-size: 13px; line-height: 1.8; margin-bottom: 16px; flex-grow: 1;">
-            <div><strong>Qty :</strong> ${qty}</div>
-            <div><strong>Rate :</strong> ₹${rate.toFixed(2)}</div>
-            <div><strong>Amount :</strong> ₹${amount.toFixed(2)}</div>
+            <div><strong>Code :</strong> ${escapeHtml(row.employee_code)}</div>
+            <div><strong>Name :</strong> ${escapeHtml(row.employee_name)}</div>
+            <div><strong>Unit :</strong> ${escapeHtml(row.unit)}</div>
+            <div><strong>Item :</strong> ${escapeHtml(row.item_name)}</div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 12px 0; padding: 12px 0; border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line);">
+              <div><small style="color:var(--muted); display:block; line-height: 1.2;">Issued</small><strong style="font-size: 15px;">${Number(row.issued_qty || 0)}</strong></div>
+              <div><small style="color:var(--muted); display:block; line-height: 1.2;">Allowed</small><strong style="font-size: 15px;">${row.allowed_qty !== null ? Number(row.allowed_qty) : 'No Policy'}</strong></div>
+              <div><small style="color:var(--muted); display:block; line-height: 1.2;">Pending</small><strong class="text-amber" style="font-size: 15px;">${qty}</strong></div>
+            </div>
+            
+            <div style="margin-top: 6px;"><strong>Deduct Amount :</strong> ₹${amount.toFixed(2)}</div>
             <div><strong>Status :</strong> <span class="badge ${escapeHtml(status)}">${escapeHtml(status)}</span></div>
             ${row.reason ? `<div class="reason" style="margin-top: 8px; color: var(--muted);">${escapeHtml(row.reason)}</div>` : ''}
           </div>
@@ -150,7 +157,6 @@ async function loadReviewStage2(emp) {
       `;
     }).join("") || `<div class="empty" style="grid-column: 1 / -1;">No review items found.</div>`;
 
-    // Bind Auto-refreshed Totals to the UI
     document.getElementById("sumCountPending").textContent = counts.Pending;
     document.getElementById("sumCountDeducted").textContent = counts.Deducted;
     document.getElementById("sumCountWaived").textContent = counts.Waived;

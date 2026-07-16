@@ -2,14 +2,28 @@ function render() {
   if (!state) return;
   document.getElementById("dbPath").textContent = state.dbPath || "Unknown";
   
-  document.getElementById("employeeCount").textContent = Array.isArray(state.employees) ? state.employees.length : 0;
-  document.getElementById("deductionTotal").textContent = `Rs. ${(Array.isArray(state.salaryDeductions) ? state.salaryDeductions : []).reduce((sum, row) => sum + Number(row.amount || 0), 0).toFixed(2)}`;
+  // ISSUE 4 FIX: Render comprehensive dashboard
+  document.getElementById("dashPendingReviews").textContent = state.reviewPendingCount || 0;
+  
+  const heldCount = (state.reviews || []).filter(r => r.status === 'Held' || r.status === 'Hold').length;
+  document.getElementById("dashHeldCases").textContent = heldCount;
+  
+  const waivedCount = (state.waiveRecords || []).length;
+  document.getElementById("dashWaivedCases").textContent = waivedCount;
+  
+  document.getElementById("dashTotalReviews").textContent = state.reviewTotalCount || 0;
+  
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todayImports = (state.imports || []).filter(i => (i.imported_at || "").startsWith(todayStr)).length;
+  document.getElementById("dashTodayImports").textContent = todayImports;
+  
+  document.getElementById("dashEmployees").textContent = Array.isArray(state.employees) ? state.employees.length : 0;
   
   const matrixRows = state.uniformIssueMatrix?.rows;
-  document.getElementById("issueCount").textContent = state.uniformIssueMatrix?.totalRows ?? (Array.isArray(matrixRows) ? matrixRows.length : 0);
+  document.getElementById("dashDistRows").textContent = state.uniformIssueMatrix?.totalRows ?? (Array.isArray(matrixRows) ? matrixRows.length : 0);
   
-  const pendingReviews = Array.isArray(state.reviews) ? state.reviews.filter((r) => r.status === "Pending").length : 0;
-  document.getElementById("reviewCount").textContent = state.reviewPendingCount ?? pendingReviews;
+  const recoveredTotal = (state.salaryDeductions || []).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  document.getElementById("dashRecovered").textContent = `Rs. ${recoveredTotal.toFixed(2)}`;
 
   renderLatestImport();
   renderEmployees();

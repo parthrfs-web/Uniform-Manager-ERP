@@ -90,8 +90,9 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       }
       return created;
     },
+    
+    // ISSUE 2 FIX: Moved synchronous blocking algorithm into a chunkable process
     evaluateEntitlementsForImport(importId, progressCallback) {
-      // Allow importId = null to process the entire database in one pass
       const importedIssues = importId 
         ? all("SELECT * FROM uniform_issues WHERE import_id = ? AND quantity > 0", [Number(importId)])
         : all("SELECT * FROM uniform_issues WHERE quantity > 0");
@@ -121,12 +122,8 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       const processedIssueIds = new Set();
       const generatedIssueIds = new Set();
       
-      let processed = 0;
       const total = importedIssues.length;
 
-      // ==========================================
-      // RESTORED: issueKey and helpers
-      // ==========================================
       const issueKey = (issue) => issue.id || `${issue.import_id}:${issue.source_sheet}:${issue.source_row}:${issue.employee_code}:${issue.item_name}`;
       
       const logReviewGeneration = (issue, created, note = "") => {
@@ -148,105 +145,49 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         logReviewGeneration(issue, true);
         return true;
       };
-      // ==========================================
 
-      for (const issue of importedIssues) {
-        const sourceIssueKey = issueKey(issue);
-        if (processedIssueIds.has(sourceIssueKey)) {
-          continue;
-        }
-        processedIssueIds.add(sourceIssueKey);
+      const processBatch = (start, end) => {
+        for (let i = start; i < end; i++) {
+          const issue = importedIssues[i];
+          const sourceIssueKey = issueKey(issue);
+          if (processedIssueIds.has(sourceIssueKey)) continue;
+          processedIssueIds.add(sourceIssueKey);
 
-        // Group evaluations purely by year
-        const periodKey = issue.issue_year 
-            ? `year:${issue.issue_year}` 
-            : `label:${issue.issue_period_label || ""}`;
-        
-        const key = `${issue.employee_code}|${issue.unit}|${issue.item_name}|${periodKey}`.toLowerCase();
-        
-        if (checked.has(key)) continue;
-        checked.add(key);
-
-        const policy = policyByUnitItem.get(`${String(issue.unit).toLowerCase()}|${String(issue.item_name).toLowerCase()}`);
-        const isRajjan = String(issue.employee_name || "").toLowerCase().includes("rajjan") || String(issue.employee_code) === "Rajjan Kumar";
-
-        if (!policy) {
-          let periodSql = "";
-          const params = [issue.employee_code, issue.item_name, issue.unit || ""];
+          const periodKey = issue.issue_year 
+              ? `year:${issue.issue_year}` 
+              : `label:${issue.issue_period_label || ""}`;
           
-          if (issue.issue_year) {
-              periodSql = " AND issue_year = ?";
-              params.push(issue.issue_year);
-          } else if (issue.issue_period_label) {
-              periodSql = " AND lower(COALESCE(issue_period_label, '')) = lower(?)";
-              params.push(issue.issue_period_label);
-          }
+          const key = `${issue.employee_code}|${issue.unit}|${issue.item_name}|${periodKey}`.toLowerCase();
           
-          if (importId) params.push(Number(importId));
+          if (checked.has(key)) continue;
+          checked.add(key);
 
-          const importedQuantity = scalar(
-            `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
-             WHERE employee_code = ? AND lower(item_name) = lower(?)
-               AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-               ${periodSql}
-               ${importId ? "AND import_id = ?" : ""}`,
-            params
-          );
+          const policy = policyByUnitItem.get(`${String(issue.unit).toLowerCase()}|${String(issue.item_name).toLowerCase()}`);
+          const isRajjan = String(issue.employee_name || "").toLowerCase().includes("rajjan") || String(issue.employee_code) === "Rajjan Kumar";
 
-          const created = queueReview(issue, {
-            employee_code: issue.employee_code,
-            employee_name: issue.employee_name,
-            unit: issue.unit || "",
-            item_name: issue.item_name,
-            issue_month: issue.issue_month || null,
-            issue_year: issue.issue_year || null,
-            issue_period_label: issue.issue_period_label || "",
-            issued_qty: importedQuantity,
-            allowed_qty: null,
-            excess_qty: importedQuantity,
-            item_cost: 0,
-            estimated_amount: 0,
-            reason: `No entitlement policy found for ${issue.unit || "Unknown Unit"} / ${issue.item_name}.`,
-          });
-          
-          if (isRajjan && created) rajjanReviews++;
-          
-        } else {
-          const periodFilter = issue.issue_year
-            ? { sql: " AND issue_year = ?", params: [issue.issue_year] }
-            : issue.issue_period_label
-              ? { sql: " AND lower(COALESCE(issue_period_label, '')) = lower(?)", params: [issue.issue_period_label] }
-              : { sql: "", params: [] };
-          
-          const annualQuantity = scalar(
-            `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
-             WHERE employee_code = ? AND lower(item_name) = lower(?)
-             AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-             ${periodFilter.sql}`,
-            [issue.employee_code, issue.item_name, issue.unit || "", ...periodFilter.params]
-          );
-          const allowed = Number(policy.yearly_entitlement || 0);
-          
-          const settledQuantity = scalar(
-            `SELECT COALESCE(SUM(excess_qty), 0) FROM review_queue
-             WHERE employee_code = ? AND lower(item_name) = lower(?)
-               AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-               AND status IN ('Waived', 'Deducted', 'Deduct')
-               ${periodFilter.sql}`,
-            [issue.employee_code, issue.item_name, issue.unit || "", ...periodFilter.params]
-          );
-          const unresolvedQuantity = scalar(
-            `SELECT COALESCE(SUM(excess_qty), 0) FROM review_queue
-             WHERE employee_code = ? AND lower(item_name) = lower(?)
-               AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-               AND status IN ('Pending', 'Held', 'Hold')
-               ${periodFilter.sql}`,
-            [issue.employee_code, issue.item_name, issue.unit || "", ...periodFilter.params]
-          );
+          if (!policy) {
+            let periodSql = "";
+            const params = [issue.employee_code, issue.item_name, issue.unit || ""];
+            
+            if (issue.issue_year) {
+                periodSql = " AND issue_year = ?";
+                params.push(issue.issue_year);
+            } else if (issue.issue_period_label) {
+                periodSql = " AND lower(COALESCE(issue_period_label, '')) = lower(?)";
+                params.push(issue.issue_period_label);
+            }
+            
+            if (importId) params.push(Number(importId));
 
-          if (annualQuantity > allowed + settledQuantity + unresolvedQuantity) {
-            const excess = annualQuantity - allowed - settledQuantity - unresolvedQuantity;
-            const amount = excess * Number(policy.item_cost || 0);
+            const importedQuantity = scalar(
+              `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
+               WHERE employee_code = ? AND lower(item_name) = lower(?)
+                 AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
+                 ${periodSql}
+                 ${importId ? "AND import_id = ?" : ""}`,
+              params
+            );
+
             const created = queueReview(issue, {
               employee_code: issue.employee_code,
               employee_name: issue.employee_name,
@@ -255,50 +196,126 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
               issue_month: issue.issue_month || null,
               issue_year: issue.issue_year || null,
               issue_period_label: issue.issue_period_label || "",
-              issued_qty: annualQuantity,
-              allowed_qty: allowed,
-              excess_qty: excess,
-              item_cost: Number(policy.item_cost || 0),
-              estimated_amount: amount,
-              reason: `${issue.item_name} entitlement exceeded.`,
+              issued_qty: importedQuantity,
+              allowed_qty: null,
+              excess_qty: importedQuantity,
+              item_cost: 0,
+              estimated_amount: 0,
+              reason: `No entitlement policy found for ${issue.unit || "Unknown Unit"} / ${issue.item_name}.`,
             });
+            
             if (isRajjan && created) rajjanReviews++;
+            
+          } else {
+            const periodFilter = issue.issue_year
+              ? { sql: " AND issue_year = ?", params: [issue.issue_year] }
+              : issue.issue_period_label
+                ? { sql: " AND lower(COALESCE(issue_period_label, '')) = lower(?)", params: [issue.issue_period_label] }
+                : { sql: "", params: [] };
+            
+            const annualQuantity = scalar(
+              `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
+               WHERE employee_code = ? AND lower(item_name) = lower(?)
+               AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
+               ${periodFilter.sql}`,
+              [issue.employee_code, issue.item_name, issue.unit || "", ...periodFilter.params]
+            );
+            const allowed = Number(policy.yearly_entitlement || 0);
+            
+            const settledQuantity = scalar(
+              `SELECT COALESCE(SUM(excess_qty), 0) FROM review_queue
+               WHERE employee_code = ? AND lower(item_name) = lower(?)
+                 AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
+                 AND status IN ('Waived', 'Deducted', 'Deduct')
+                 ${periodFilter.sql}`,
+              [issue.employee_code, issue.item_name, issue.unit || "", ...periodFilter.params]
+            );
+            const unresolvedQuantity = scalar(
+              `SELECT COALESCE(SUM(excess_qty), 0) FROM review_queue
+               WHERE employee_code = ? AND lower(item_name) = lower(?)
+                 AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
+                 AND status IN ('Pending', 'Held', 'Hold')
+                 ${periodFilter.sql}`,
+              [issue.employee_code, issue.item_name, issue.unit || "", ...periodFilter.params]
+            );
+
+            if (annualQuantity > allowed + settledQuantity + unresolvedQuantity) {
+              const excess = annualQuantity - allowed - settledQuantity - unresolvedQuantity;
+              const amount = excess * Number(policy.item_cost || 0);
+              const created = queueReview(issue, {
+                employee_code: issue.employee_code,
+                employee_name: issue.employee_name,
+                unit: issue.unit || "",
+                item_name: issue.item_name,
+                issue_month: issue.issue_month || null,
+                issue_year: issue.issue_year || null,
+                issue_period_label: issue.issue_period_label || "",
+                issued_qty: annualQuantity,
+                allowed_qty: allowed,
+                excess_qty: excess,
+                item_cost: Number(policy.item_cost || 0),
+                estimated_amount: amount,
+                reason: `${issue.item_name} entitlement exceeded.`,
+              });
+              if (isRajjan && created) rajjanReviews++;
+            }
           }
         }
-        
-        processed++;
-        if (processed % 25 === 0) {
-           if (progressCallback) progressCallback(processed, total);
+      };
+
+      const finalize = () => {
+        if (rajjanDistRows > 0) {
+            console.log(`\nEmployee: Rajjan Kumar`);
+            console.log(`Distribution rows found: ${rajjanDistRows}`);
+            console.log(`Uniform issues found: ${rajjanIssues}`);
+            console.log(`Review rows generated: ${rajjanReviews}\n`);
         }
+
+        this.bulkCreateReviews(reviewRows);
+        if (reviewRows.length) {
+          audit("Entitlement Review Generated", `${reviewRows.length} imported issue rows need review.`);
+          save();
+        }
+        return reviewRows.length;
+      };
+
+      // ISSUE 2 FIX: If no progress callback is passed (i.e. importer CLI tests), do sync execution
+      if (!progressCallback) {
+          processBatch(0, total);
+          return finalize();
       }
 
-      if (rajjanDistRows > 0) {
-          console.log(`\nEmployee: Rajjan Kumar`);
-          console.log(`Distribution rows found: ${rajjanDistRows}`);
-          console.log(`Uniform issues found: ${rajjanIssues}`);
-          console.log(`Review rows generated: ${rajjanReviews}\n`);
-      }
-
-      this.bulkCreateReviews(reviewRows);
-      if (reviewRows.length) {
-        audit("Entitlement Review Generated", `${reviewRows.length} imported issue rows need review.`);
-        save();
-      }
-      return reviewRows.length;
+      // ISSUE 2 FIX: If progress callback provided (i.e. electron app commit process), yield safely
+      return (async () => {
+          const BATCH_SIZE = 25;
+          for (let i = 0; i < total; i += BATCH_SIZE) {
+              processBatch(i, Math.min(i + BATCH_SIZE, total));
+              if (progressCallback) progressCallback(Math.min(i + BATCH_SIZE, total), total);
+              await new Promise(resolve => setTimeout(resolve, 0));
+          }
+          return finalize();
+      })();
     },
     
+    // ISSUE 2 FIX: Safely handles both async UI context and purely sync CLI context
     recalculateReviews(onProgress) {
-      // CLEAR all old generated Pending reviews explicitly to prevent duplication creep
       db.run("DELETE FROM review_queue WHERE status = 'Pending'");
       
-      // FIX: Do NOT loop over imports. Evaluate the entire uniform_issues table in a single definitive pass.
-      const generated = this.evaluateEntitlementsForImport(null, (processed, total) => {
-          if (onProgress) onProgress(null, 1, 1, processed, total);
-      });
+      if (!onProgress) {
+          const generated = this.evaluateEntitlementsForImport(null);
+          audit("Review Queue Recalculated", `${generated} pending review rows generated from current policies.`);
+          save();
+          return generated;
+      }
 
-      audit("Review Queue Recalculated", `${generated} pending review rows generated from current policies.`);
-      save();
-      return generated;
+      return (async () => {
+          const generated = await this.evaluateEntitlementsForImport(null, (processed, total) => {
+              if (onProgress) onProgress(null, 1, 1, processed, total);
+          });
+          audit("Review Queue Recalculated", `${generated} pending review rows generated from current policies.`);
+          save();
+          return generated;
+      })();
     },
     resetOperationalData() {
       db.run("BEGIN TRANSACTION");

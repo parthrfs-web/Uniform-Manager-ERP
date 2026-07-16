@@ -1,7 +1,9 @@
 function setImporting(isImporting) {
-  const button = document.getElementById("importBtn");
-  button.disabled = isImporting;
-  button.textContent = isImporting ? "Importing..." : "Import Excel";
+  const button = document.getElementById("goImportBtn");
+  if(button) {
+    button.disabled = isImporting;
+    button.textContent = isImporting ? "Importing..." : "Choose Excel Workbook";
+  }
 }
 
 function showImportModal(inspection) {
@@ -84,9 +86,16 @@ function renderHistory() {
   }
 }
 
-document.getElementById("importBtn")?.addEventListener("click", async () => {
+// ISSUE 1 FIX: Topbar button NO LONGER triggers import. It strictly navigates to Import page.
+document.getElementById("importBtn")?.addEventListener("click", (e) => {
+  e.preventDefault();
+  setView("import");
+});
+
+// ISSUE 1 FIX: Page button now strictly owns the actual import execution.
+document.getElementById("goImportBtn")?.addEventListener("click", async (e) => {
+  e.preventDefault();
   try {
-    console.log("Import button clicked");
     clearImportError();
     if (!desktopApi) {
       showImportError("Excel import works only in the Electron desktop app.");
@@ -118,7 +127,6 @@ document.getElementById("sheetCandidates")?.addEventListener("change", (event) =
 document.getElementById("confirmImportBtn")?.addEventListener("click", async () => {
   if (!pendingInspection || !selectedSheetName) return;
   try {
-    console.log("Import preview requested");
     setImporting(true);
     document.getElementById("confirmImportBtn").disabled = true;
     toast(`Validating sheet ${selectedSheetName}...`);
@@ -159,7 +167,6 @@ document.getElementById("cancelPreviewBtn")?.addEventListener("click", () => {
 document.getElementById("commitImportBtn")?.addEventListener("click", async () => {
   if (!currentPreviewData) return;
   try {
-    console.log("Import commit requested");
     setImporting(true);
     document.getElementById("commitImportBtn").disabled = true;
     
@@ -174,7 +181,6 @@ document.getElementById("commitImportBtn")?.addEventListener("click", async () =
     stopProgress();
     render();
     currentPreviewData = null;
-    console.log("Import finished");
     toast(result.summary.duplicate ? "Duplicate import hash detected. Discarded." : "Import completed successfully.");
   } catch (error) {
     stopProgress();
@@ -201,8 +207,3 @@ if (window.uniformManager && window.uniformManager.onImportProgress) {
     if (pctEl && data.progress !== undefined) pctEl.textContent = `${Math.floor(data.progress)}%`;
   });
 }
-
-document.getElementById("goImportBtn")?.addEventListener("click", (e) => {
-  e.preventDefault();
-  setView("import");
-});

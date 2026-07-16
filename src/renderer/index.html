@@ -43,17 +43,21 @@
           <p id="viewSubtitle">Import employee master data and keep it locally on this PC.</p>
         </div>
         <div class="actions">
-          <button id="importBtn" class="primary">Import Excel</button>
+          <button id="importBtn" class="primary">Go to Import Page</button>
         </div>
       </header>
 
       <section class="view active" id="dashboard">
         <div id="importError" class="error-panel"></div>
-        <div class="stats">
-          <article><span>Employees</span><strong id="employeeCount">0</strong></article>
-          <article><span>Distribution Rows</span><strong id="issueCount">0</strong></article>
-          <article><span>Pending Reviews</span><strong id="reviewCount">0</strong></article>
-          <article><span>Total Deduction Amount</span><strong id="deductionTotal">Rs. 0.00</strong></article>
+        <div class="stats" id="dashboardStats" style="grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 16px;">
+          <article><span>Pending Reviews</span><strong id="dashPendingReviews">0</strong></article>
+          <article><span>Held Cases</span><strong id="dashHeldCases">0</strong></article>
+          <article><span>Waived Cases</span><strong id="dashWaivedCases">0</strong></article>
+          <article><span>Total Review Items</span><strong id="dashTotalReviews">0</strong></article>
+          <article><span>Today's Imports</span><strong id="dashTodayImports">0</strong></article>
+          <article><span>Employees Imported</span><strong id="dashEmployees">0</strong></article>
+          <article><span>Distribution Rows</span><strong id="dashDistRows">0</strong></article>
+          <article><span>Recovered Amount</span><strong id="dashRecovered">Rs. 0.00</strong></article>
         </div>
         <div class="panel">
           <h3>Latest Import Result</h3>
