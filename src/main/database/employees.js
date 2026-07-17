@@ -64,8 +64,19 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
     deleteEmployee(employeeCode) {
       const existing = all("SELECT employee_code, employee_name FROM employees WHERE employee_code = ?", [employeeCode])[0];
       if (!existing) throw new Error(`Employee ${employeeCode} was not found.`);
-      db.run("DELETE FROM employees WHERE employee_code = ?", [employeeCode]);
-      db.run("DELETE FROM review_queue WHERE employee_code = ?", [employeeCode]);
+      db.run("BEGIN TRANSACTION");
+      try {
+          db.run("DELETE FROM employees WHERE employee_code = ?", [employeeCode]);
+          db.run("DELETE FROM uniform_issues WHERE employee_code = ?", [employeeCode]);
+          db.run("DELETE FROM review_queue WHERE employee_code = ?", [employeeCode]);
+          db.run("DELETE FROM review_decisions WHERE employee_code = ?", [employeeCode]);
+          db.run("DELETE FROM salary_deductions WHERE employee_code = ?", [employeeCode]);
+          db.run("DELETE FROM waive_records WHERE employee_code = ?", [employeeCode]);
+          db.run("COMMIT");
+      } catch (error) {
+          db.run("ROLLBACK");
+          throw error;
+      }
       audit("Employee Deleted", `${existing.employee_code} - ${existing.employee_name}`);
       save();
     }

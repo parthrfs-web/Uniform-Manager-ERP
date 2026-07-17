@@ -27,7 +27,7 @@
         <button class="nav-button" data-view="policies">Unit Entitlements</button>
         <button class="nav-button" data-view="review">Review Queue</button>
         <button class="nav-button" data-view="deductions">Reports</button>
-        <button class="nav-button danger-nav" data-view="reset">Reset Data</button>
+        <button class="nav-button danger-nav" data-view="reset">Data Management</button>
       </nav>
       <div class="db-box">
         <span>Local database</span>
@@ -137,6 +137,27 @@
       </section>
 
       <section class="view" id="reset">
+        <div class="panel" style="max-width: 760px; margin-bottom: 24px;">
+          <div class="panel-heading" style="padding: 0 0 16px 0;">
+            <div>
+              <h3>Data Management</h3>
+              <p>Safely backup your entire system or restore from a previous backup file.</p>
+            </div>
+          </div>
+          <div class="two-col">
+            <article style="padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: #131922;">
+              <h4 style="margin: 0 0 8px;">Backup System</h4>
+              <p style="color: var(--muted); margin: 0 0 16px; font-size: 13px;">Save a copy of all employees, settings, and distribution history to your PC.</p>
+              <button id="backupDbBtn" class="primary" type="button" style="width: 100%;">Backup Database</button>
+            </article>
+            <article style="padding: 16px; border: 1px solid #69363c; border-radius: 8px; background: #2a1b20;">
+              <h4 style="margin: 0 0 8px; color: var(--red);">Restore System</h4>
+              <p style="color: var(--muted); margin: 0 0 16px; font-size: 13px;">Replace current data with a backup. Current data will be permanently lost.</p>
+              <button id="restoreDbBtn" class="danger" type="button" style="width: 100%;">Restore Database</button>
+            </article>
+          </div>
+        </div>
+
         <div class="panel danger-zone">
           <h3>Reset Imported Data</h3>
           <p>This clears imported employees, distribution register rows, import history and review queue records. Unit policies and item settings are kept.</p>

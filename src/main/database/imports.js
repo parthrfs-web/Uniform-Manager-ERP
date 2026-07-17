@@ -125,6 +125,23 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       const total = importedIssues.length;
 
       const issueKey = (issue) => issue.id || `${issue.import_id}:${issue.source_sheet}:${issue.source_row}:${issue.employee_code}:${issue.item_name}`;
+      const buildPeriodScope = (issue, tableAlias = "") => {
+        const prefix = tableAlias ? `${tableAlias}.` : "";
+        const sql = [
+          `COALESCE(${prefix}issue_month, 0) = COALESCE(?, 0)`,
+          `COALESCE(${prefix}issue_year, 0) = COALESCE(?, 0)`,
+          `lower(COALESCE(${prefix}issue_period_label, '')) = lower(COALESCE(?, ''))`,
+        ].join(" AND ");
+        return {
+          sql: ` AND ${sql}`,
+          params: [
+            issue.issue_month ? Number(issue.issue_month) : null,
+            issue.issue_year ? Number(issue.issue_year) : null,
+            issue.issue_period_label || "",
+          ],
+          key: `${issue.issue_month || 0}|${issue.issue_year || 0}|${String(issue.issue_period_label || "").toLowerCase()}`,
+        };
+      };
       
       const logReviewGeneration = (issue, created, note = "") => {
         console.log(
@@ -153,9 +170,8 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           if (processedIssueIds.has(sourceIssueKey)) continue;
           processedIssueIds.add(sourceIssueKey);
 
-          const periodKey = issue.issue_year 
-              ? `year:${issue.issue_year}` 
-              : `label:${issue.issue_period_label || ""}`;
+          const periodScope = buildPeriodScope(issue);
+          const periodKey = periodScope.key;
           
           const key = `${issue.employee_code}|${issue.unit}|${issue.item_name}|${periodKey}`.toLowerCase();
           
@@ -166,16 +182,8 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           const isRajjan = String(issue.employee_name || "").toLowerCase().includes("rajjan") || String(issue.employee_code) === "Rajjan Kumar";
 
           if (!policy) {
-            let periodSql = "";
             const params = [issue.employee_code, issue.item_name, issue.unit || ""];
-            
-            if (issue.issue_year) {
-                periodSql = " AND issue_year = ?";
-                params.push(issue.issue_year);
-            } else if (issue.issue_period_label) {
-                periodSql = " AND lower(COALESCE(issue_period_label, '')) = lower(?)";
-                params.push(issue.issue_period_label);
-            }
+            params.push(...periodScope.params);
             
             if (importId) params.push(Number(importId));
 
@@ -183,7 +191,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
               `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
                WHERE employee_code = ? AND lower(item_name) = lower(?)
                  AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-                 ${periodSql}
+                 ${periodScope.sql}
                  ${importId ? "AND import_id = ?" : ""}`,
               params
             );
@@ -207,18 +215,12 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
             if (isRajjan && created) rajjanReviews++;
             
           } else {
-            const periodFilter = issue.issue_year
-              ? { sql: " AND issue_year = ?", params: [issue.issue_year] }
-              : issue.issue_period_label
-                ? { sql: " AND lower(COALESCE(issue_period_label, '')) = lower(?)", params: [issue.issue_period_label] }
-                : { sql: "", params: [] };
-            
-            const annualQuantity = scalar(
+            const issuedQuantity = scalar(
               `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
                WHERE employee_code = ? AND lower(item_name) = lower(?)
                AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-               ${periodFilter.sql}`,
-              [issue.employee_code, issue.item_name, issue.unit || "", ...periodFilter.params]
+               ${periodScope.sql}`,
+              [issue.employee_code, issue.item_name, issue.unit || "", ...periodScope.params]
             );
             const allowed = Number(policy.yearly_entitlement || 0);
             
@@ -227,20 +229,20 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
                WHERE employee_code = ? AND lower(item_name) = lower(?)
                  AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
                  AND status IN ('Waived', 'Deducted', 'Deduct')
-                 ${periodFilter.sql}`,
-              [issue.employee_code, issue.item_name, issue.unit || "", ...periodFilter.params]
+                 ${periodScope.sql}`,
+              [issue.employee_code, issue.item_name, issue.unit || "", ...periodScope.params]
             );
             const unresolvedQuantity = scalar(
               `SELECT COALESCE(SUM(excess_qty), 0) FROM review_queue
                WHERE employee_code = ? AND lower(item_name) = lower(?)
                  AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
                  AND status IN ('Pending', 'Held', 'Hold')
-                 ${periodFilter.sql}`,
-              [issue.employee_code, issue.item_name, issue.unit || "", ...periodFilter.params]
+                 ${periodScope.sql}`,
+              [issue.employee_code, issue.item_name, issue.unit || "", ...periodScope.params]
             );
 
-            if (annualQuantity > allowed + settledQuantity + unresolvedQuantity) {
-              const excess = annualQuantity - allowed - settledQuantity - unresolvedQuantity;
+            if (issuedQuantity > allowed + settledQuantity + unresolvedQuantity) {
+              const excess = issuedQuantity - allowed - settledQuantity - unresolvedQuantity;
               const amount = excess * Number(policy.item_cost || 0);
               const created = queueReview(issue, {
                 employee_code: issue.employee_code,
@@ -250,7 +252,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
                 issue_month: issue.issue_month || null,
                 issue_year: issue.issue_year || null,
                 issue_period_label: issue.issue_period_label || "",
-                issued_qty: annualQuantity,
+                issued_qty: issuedQuantity,
                 allowed_qty: allowed,
                 excess_qty: excess,
                 item_cost: Number(policy.item_cost || 0),

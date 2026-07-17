@@ -113,6 +113,7 @@ const APP_SCHEMA = {
     "issue_month INTEGER",
     "issue_year INTEGER",
     "issue_period_label TEXT",
+    "remarks TEXT",
     "source_sheet TEXT NOT NULL",
     "source_row INTEGER NOT NULL",
     "issued_at TEXT NOT NULL"
@@ -358,19 +359,26 @@ async function createDatabase(userDataPath) {
 
     const stmt = db.prepare(
       `INSERT INTO unit_policies (unit, item_name, yearly_entitlement, item_cost)
-       VALUES (?, ?, 0, 0)
-       ON CONFLICT(unit, item_name) DO NOTHING`
+       VALUES (?, ?, 0, 0)`
     );
     let created = 0;
+    const processed = new Set();
+    
     db.run("BEGIN TRANSACTION");
     try {
       rows.forEach((row) => {
+        const key = `${String(row.unit).toLowerCase()}|${String(row.item_name).toLowerCase()}`;
+        if (processed.has(key)) return;
+        processed.add(key);
+
         const before = scalar(
           "SELECT COUNT(*) FROM unit_policies WHERE lower(unit) = lower(?) AND lower(item_name) = lower(?)",
           [row.unit, row.item_name]
         );
-        stmt.run([row.unit, row.item_name]);
-        if (!before) created += 1;
+        if (before === 0) {
+          stmt.run([row.unit, row.item_name]);
+          created += 1;
+        }
       });
       db.run("COMMIT");
     } catch (error) {
@@ -555,7 +563,7 @@ const moduleContext = { db, dbPath, scalar, all, save, audit, now, normalizeLabe
     ...policyModule,
     ...inventoryModule,
     ...reportModule,
-  };;
+  };
 }
 
 module.exports = { createDatabase };

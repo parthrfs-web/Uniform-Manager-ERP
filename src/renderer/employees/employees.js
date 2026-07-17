@@ -34,12 +34,20 @@ document.getElementById("employeeForm")?.addEventListener("submit", async (event
   if (!desktopApi) return showImportError("Works only in Desktop App.");
   try {
     const employee = Object.fromEntries(new FormData(event.currentTarget).entries());
+    
+    if (!employee.employee_code || !String(employee.employee_code).trim()) throw new Error("Employee Code cannot be blank.");
+
+    startProgress();
     await window.uniformManager.updateEmployee(employee);
+    await window.uniformManager.recalculateReviews();
     state = await window.uniformManager.getState({ distributionLimit });
+    stopProgress();
+    
     render();
     hideEmployeeModal();
-    toast("Employee saved.");
+    toast("Employee saved successfully. Review Queue recalculated.");
   } catch (error) {
+    stopProgress();
     showImportError(error.message || "Employee save failed.");
   }
 });
@@ -57,13 +65,20 @@ document.addEventListener("click", async (event) => {
     const employeeCode = deleteButton.dataset.deleteEmployee;
     const employee = state.employees.find((row) => row.employee_code === employeeCode);
     const label = employee ? `${employee.employee_code} - ${employee.employee_name}` : employeeCode;
-    if (!confirm(`Delete employee ${label}?\n\nThis will remove the employee from master data and review queue.`)) return;
+    
+    if (!confirm(`Delete employee ${label}?\n\nThis will remove the employee from master data and permanently delete all their uniform issue history and review records. This action cannot be undone.`)) return;
+    
     try {
+      startProgress();
       await window.uniformManager.deleteEmployee(employeeCode);
+      await window.uniformManager.recalculateReviews();
       state = await window.uniformManager.getState({ distributionLimit });
+      stopProgress();
+      
       render();
-      toast("Employee deleted.");
+      toast("Employee and linked history permanently deleted.");
     } catch (error) {
+      stopProgress();
       showImportError(error.message || "Delete failed.");
     }
     return;

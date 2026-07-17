@@ -6,7 +6,7 @@ const views = {
   deductions: ["Reports", "Payroll deduction and waive records created from review decisions."],
   review: ["Review Queue", "Resolve records that need office staff attention."],
   policies: ["Unit Entitlements", "Set allowed uniform quantity for each unit/company and item."],
-  reset: ["Reset Data", "Clear imported operational data only after confirmation."],
+  reset: ["Data Management", "Backup, restore, or securely reset application data."],
 };
 
 function setView(name) {

@@ -22,6 +22,16 @@ function hideReviewDecisionModal() {
   document.getElementById("reviewDecisionModal").classList.remove("show");
 }
 
+function reviewExcessQty(row) {
+  const issued = Number(row.issued_qty || 0);
+  const allowed = row.allowed_qty === null || row.allowed_qty === undefined ? 0 : Number(row.allowed_qty || 0);
+  return Math.max(0, issued - allowed);
+}
+
+function reviewStatusLabel(status) {
+  return status === "Pending" ? "Review Required" : status;
+}
+
 function decisionButtons(row) {
   if (row.status !== "Pending") {
     return `
@@ -117,7 +127,7 @@ async function loadReviewStage2(emp) {
       const status = row.status || 'Pending';
       const isPending = status === 'Pending';
       
-      const qty = Number(row.excess_qty || 0);
+      const qty = reviewExcessQty(row);
       const rate = Number(row.live_rate !== undefined ? row.live_rate : (row.item_cost || 0));
       const amount = qty * rate;
       
@@ -145,11 +155,11 @@ async function loadReviewStage2(emp) {
             <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 12px 0; padding: 12px 0; border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line);">
               <div><small style="color:var(--muted); display:block; line-height: 1.2;">Issued</small><strong style="font-size: 15px;">${Number(row.issued_qty || 0)}</strong></div>
               <div><small style="color:var(--muted); display:block; line-height: 1.2;">Allowed</small><strong style="font-size: 15px;">${row.allowed_qty !== null ? Number(row.allowed_qty) : 'No Policy'}</strong></div>
-              <div><small style="color:var(--muted); display:block; line-height: 1.2;">Pending</small><strong class="text-amber" style="font-size: 15px;">${qty}</strong></div>
+              <div><small style="color:var(--muted); display:block; line-height: 1.2;">Excess</small><strong class="text-amber" style="font-size: 15px;">${qty}</strong></div>
             </div>
             
             <div style="margin-top: 6px;"><strong>Deduct Amount :</strong> ₹${amount.toFixed(2)}</div>
-            <div><strong>Status :</strong> <span class="badge ${escapeHtml(status)}">${escapeHtml(status)}</span></div>
+            <div><strong>Status :</strong> <span class="badge ${escapeHtml(status)}">${escapeHtml(reviewStatusLabel(status))}</span></div>
             ${row.reason ? `<div class="reason" style="margin-top: 8px; color: var(--muted);">${escapeHtml(row.reason)}</div>` : ''}
           </div>
           ${decisionButtons(row)}

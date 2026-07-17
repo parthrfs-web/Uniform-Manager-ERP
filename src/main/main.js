@@ -1,3 +1,5 @@
+const fs = require("fs");
+const initSqlJs = require("sql.js");
 const path = require("path");
 const { fork } = require("child_process");
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
@@ -280,6 +282,81 @@ ipcMain.handle("app:commitImport", async (event) => {
   }
 });
 
+// ====== BACKUP & RESTORE MODULE ======
+
+ipcMain.handle("app:backupDatabase", async () => handleSafe(async () => {
+  db.save(); // Ensure all pending memory changes are flushed to disk
+  
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const dateStr = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+  const timeStr = `${pad(now.getHours())}-${pad(now.getMinutes())}`;
+  const defaultName = `UniformManager_Backup_${dateStr}_${timeStr}.db`;
+
+  const result = await dialog.showSaveDialog({
+    title: 'Backup Database',
+    defaultPath: defaultName,
+    filters: [{ name: 'Database Files', extensions: ['db', 'sqlite'] }]
+  });
+
+  if (result.canceled || !result.filePath) return { canceled: true };
+
+  fs.copyFileSync(db.dbPath, result.filePath);
+  return { canceled: false, filePath: result.filePath };
+}));
+
+ipcMain.handle("app:restoreDatabase", async () => handleSafe(async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Restore Database',
+    filters: [{ name: 'Database Files', extensions: ['db', 'sqlite'] }],
+    properties: ['openFile']
+  });
+
+  if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+    return { canceled: true };
+  }
+
+  const filePath = result.filePaths[0];
+
+  // 1. File Signature Validation
+  const buffer = Buffer.alloc(16);
+  const fd = fs.openSync(filePath, 'r');
+  fs.readSync(fd, buffer, 0, 16, 0);
+  fs.closeSync(fd);
+
+  if (buffer.toString('utf8', 0, 15) !== 'SQLite format 3') {
+    throw new Error("Invalid backup file. The selected file is not a valid SQLite database.");
+  }
+
+  // 2. Schema Compatibility Validation
+  const SQL = await initSqlJs();
+  let tempDb;
+  try {
+    const fileBuffer = fs.readFileSync(filePath);
+    tempDb = new SQL.Database(fileBuffer);
+    const stmt = tempDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='employees'");
+    if (!stmt.step()) {
+      throw new Error("Invalid backup structure. Core application tables are missing.");
+    }
+    stmt.free();
+  } catch (err) {
+    throw new Error("Corrupted or incompatible backup file: " + err.message);
+  } finally {
+    if (tempDb) tempDb.close();
+  }
+
+  // 3. Execute Restore
+  fs.copyFileSync(filePath, db.dbPath);
+
+  // 4. Application Restart automatically reloads the DB file from disk
+  app.relaunch();
+  app.exit(0);
+
+  return { canceled: false };
+}));
+
+// =====================================
+
 ipcMain.handle("app:getReviewQueueStage1", () => handleSafe(() => db.getReviewQueueStage1()));
 ipcMain.handle("app:getReviewQueueStage2", (_event, code) => handleSafe(() => db.getReviewQueueStage2(code)));
 
@@ -296,7 +373,6 @@ ipcMain.handle("app:getReviewQueueStage3", async (_event, req) => {
   }
 });
 
-// MODULE 5F: Ensure chunking runs safely to unblock event loop
 ipcMain.handle("app:recalculateReviews", async (event) => handleSafe(async () => {
    const generated = await db.recalculateReviews(buildProgressCb(event, "Recalculating review queue"));
    return { generated, state: db.getState() };
@@ -309,7 +385,6 @@ ipcMain.handle("app:deleteItem", (_event, itemId) => handleSafe(() => { db.delet
 ipcMain.handle("app:updateReview", (_event, action) => handleSafe(() => { db.updateReview(action); return db.getState(); }));
 ipcMain.handle("app:deleteReview", (_event, reviewId) => handleSafe(() => { db.deleteReview(reviewId); return db.getState(); }));
 
-// MODULE 5F: Any manual edits that cause recalculation now await the chunked routine natively
 ipcMain.handle("app:updateDistributionRow", async (event, record) => handleSafe(async () => { 
     db.updateDistributionRow(record); 
     await db.recalculateReviews(buildProgressCb(event, "Updating records")); 

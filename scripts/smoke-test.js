@@ -315,6 +315,32 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
     throw new Error("Employee unit shift did not apply the policy for each issue unit.");
   }
 
+  const perItemReviewPath = path.join(tmp, "per-item-review-values.xlsx");
+  const perItemReviewWorkbook = XLSX.utils.book_new();
+  const perItemReviewRows = [
+    ["Emp Code", "Name", "Father Name", "Unit", "Godown", "Month", "Pant", "Shirt", "Whistle", "Reflector"],
+    ["PI001", "Per Item Values", "Father Per Item", "PER ITEM UNIT", "Store", "Jan 2026", 2, 2, 2, 10],
+    ["PI001", "Per Item Values", "Father Per Item", "PER ITEM UNIT", "Store", "Feb 2026", 2, 0, 0, 0],
+  ];
+  XLSX.utils.book_append_sheet(perItemReviewWorkbook, XLSX.utils.aoa_to_sheet(perItemReviewRows), "DISTRIBUTION");
+  XLSX.writeFile(perItemReviewWorkbook, perItemReviewPath);
+  const perItemDb = await createDatabase(fs.mkdtempSync(path.join(os.tmpdir(), "uniform-manager-per-item-review-")));
+  importWorkbook(perItemReviewPath, perItemDb);
+  const perItemReviews = perItemDb.getState({ distributionLimit: 1000 }).reviews.filter((row) => row.employee_code === "PI001");
+  const janReviews = perItemReviews.filter((row) => row.issue_month === 1 && row.issue_year === 2026);
+  const expectedJanReviews = { Pant: 2, Shirt: 2, Whistle: 2, Reflector: 10 };
+  Object.entries(expectedJanReviews).forEach(([itemName, expectedQty]) => {
+    const review = janReviews.find((row) => row.item_name === itemName);
+    if (!review) throw new Error(`Missing per-item review row for ${itemName}.`);
+    if (Number(review.issued_qty) !== expectedQty || Number(review.allowed_qty) !== 0 || Number(review.excess_qty) !== expectedQty) {
+      throw new Error(`${itemName} review did not store per-item issued/allowed/pending values.`);
+    }
+  });
+  const febPantReview = perItemReviews.find((row) => row.item_name === "Pant" && row.issue_month === 2 && row.issue_year === 2026);
+  if (!febPantReview || Number(febPantReview.issued_qty) !== 2 || Number(febPantReview.excess_qty) !== 2) {
+    throw new Error("Review Queue aggregated Pant pending quantity across periods instead of storing the item period value.");
+  }
+
   const mixedSummary = importWorkbook(mixedWorkbookPath, db);
   if (mixedSummary.selectedSheet !== "DISTRIBUTION") {
     throw new Error(`Expected DISTRIBUTION sheet, selected ${mixedSummary.selectedSheet}`);

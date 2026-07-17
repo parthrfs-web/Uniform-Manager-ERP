@@ -34,5 +34,33 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       db.run("DELETE FROM uniform_items WHERE id = ?", [Number(itemId)]);
       audit("Item Deleted", `${existing.item_code} - ${existing.item_name}`);
       save();
+    },
+    updateUniformIssue(issue) {
+      if (!issue.employee_code || !String(issue.employee_code).trim()) throw new Error("Employee code is required.");
+      if (!issue.item_name || !String(issue.item_name).trim()) throw new Error("Item name is required.");
+      if (Number(issue.quantity) < 0) throw new Error("Quantity cannot be negative.");
+      if (issue.issue_month && (Number(issue.issue_month) < 1 || Number(issue.issue_month) > 12)) throw new Error("Invalid month. Enter 1-12.");
+      if (issue.issue_year && (Number(issue.issue_year) < 1900 || Number(issue.issue_year) > 2100)) throw new Error("Invalid year.");
+
+      db.run(
+        `UPDATE uniform_issues SET
+         issued_at = ?, issue_month = ?, issue_year = ?, item_name = ?, quantity = ?, remarks = ?
+         WHERE id = ?`,
+        [issue.issued_at, issue.issue_month || null, issue.issue_year || null, issue.item_name, issue.quantity, issue.remarks || "", issue.id]
+      );
+      audit("Distribution Record Edited", `Record #${issue.id} for ${issue.employee_code}`);
+      save();
+    },
+    deleteUniformIssue(id) {
+      db.run(`DELETE FROM uniform_issues WHERE id = ?`, [Number(id)]);
+      audit("Distribution Record Deleted", `Record #${id}`);
+      save();
+    },
+    bulkDeleteUniformIssues(ids) {
+      if (!ids || !ids.length) return;
+      const placeholders = ids.map(() => '?').join(',');
+      db.run(`DELETE FROM uniform_issues WHERE id IN (${placeholders})`, ids.map(Number));
+      audit("Bulk Delete", `Deleted ${ids.length} distribution records.`);
+      save();
     }
 });

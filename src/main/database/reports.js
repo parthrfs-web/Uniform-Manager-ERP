@@ -132,7 +132,7 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
           rows: distributionRows.slice(0, distributionLimit),
         },
         uniformIssueCount,
-        uniformIssues: issueRows.filter((row) => Number(row.quantity || 0) > 0).slice(0, 200),
+        uniformIssues: issueRows.slice(0, distributionLimit),
         imports: all("SELECT * FROM imports ORDER BY imported_at DESC LIMIT 20"),
         reviews,
         reviewPendingCount,

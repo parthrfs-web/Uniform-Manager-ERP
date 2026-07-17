@@ -17,19 +17,24 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       if (!reviewRows.length) return;
       const createdAt = now();
       
-      // FIX: Strictly match only Employee Code and Item Name to enforce ONE card per employee
       const checkStmt = db.prepare(`
         SELECT id 
         FROM review_queue 
         WHERE status = 'Pending' 
           AND employee_code = ? 
           AND lower(item_name) = lower(?)
+          AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
+          AND COALESCE(issue_month, 0) = COALESCE(?, 0)
+          AND COALESCE(issue_year, 0) = COALESCE(?, 0)
+          AND lower(COALESCE(issue_period_label, '')) = lower(COALESCE(?, ''))
       `);
       
       const updateStmt = db.prepare(`
         UPDATE review_queue 
         SET issued_qty = ?, 
+            allowed_qty = ?,
             excess_qty = excess_qty + ?, 
+            item_cost = ?,
             estimated_amount = estimated_amount + ? 
         WHERE id = ?
       `);
@@ -44,10 +49,13 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       db.run("BEGIN TRANSACTION");
       try {
         reviewRows.forEach((row) => {
-          // FIX: Bind only the two strict identifiers
           checkStmt.bind([
             row.employee_code,
-            row.item_name || ""
+            row.item_name || "",
+            row.unit || "",
+            row.issue_month ? Number(row.issue_month) : null,
+            row.issue_year ? Number(row.issue_year) : null,
+            row.issue_period_label || "",
           ]);
           
           let existingId = null;
@@ -59,7 +67,9 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           if (existingId) {
              updateStmt.run([
                Number(row.issued_qty || 0), 
+               row.allowed_qty === null || row.allowed_qty === undefined ? null : Number(row.allowed_qty || 0),
                Number(row.excess_qty || 0), 
+               Number(row.item_cost || 0),
                Number(row.estimated_amount || 0), 
                existingId
              ]);

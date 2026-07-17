@@ -30,6 +30,29 @@ function setItemEditMode(itemId = null) {
   document.getElementById("saveItemBtn").textContent = editingItemId ? "Update Item" : "Save Item";
 }
 
+function renderRawIssues() {
+  const rows = state.uniformIssues || [];
+  renderTableRows("rawIssuesRows", rows, (row) => `
+    <tr>
+      <td><input type="checkbox" class="issue-checkbox" value="${row.id}" /></td>
+      <td>${row.id}</td>
+      <td>${text(row.issued_at).split('T')[0]}</td>
+      <td>${text(row.employee_code)}</td>
+      <td>${text(row.employee_name)}</td>
+      <td>${text(row.item_name)}</td>
+      <td>${text(row.quantity)}</td>
+      <td>${text(row.issue_month)}/${text(row.issue_year)}</td>
+      <td>${text(row.remarks)}</td>
+      <td>
+        <div class="row-actions">
+          <button data-edit-raw-issue="${row.id}">Edit</button>
+          <button class="danger" data-delete-raw-issue="${row.id}">Delete</button>
+        </div>
+      </td>
+    </tr>
+  `, "No records found.", 10);
+}
+
 function renderIssues() {
   const matrix = state.uniformIssueMatrix || { items: [], rows: [] };
   document.getElementById("distributionVisibleCount").textContent = matrix.totalRows && matrix.totalRows !== matrix.rows.length
@@ -84,6 +107,8 @@ function renderIssues() {
       </td>
     </tr>
   `, "No employee distribution data available yet.", 9 + matrix.items.length);
+  
+  renderRawIssues();
 }
 
 function renderItems() {
@@ -274,4 +299,107 @@ document.addEventListener("click", async (event) => {
       showImportError(error.message || "Distribution row delete failed.");
     }
   }
+});
+
+// FEATURE 4: Bulk Selection Logic
+document.getElementById("selectAllIssues")?.addEventListener("change", (e) => {
+    const checked = e.target.checked;
+    document.querySelectorAll(".issue-checkbox").forEach(cb => cb.checked = checked);
+    updateBulkDeleteBtn();
+});
+
+document.addEventListener("change", (e) => {
+    if (e.target.classList.contains("issue-checkbox")) {
+        updateBulkDeleteBtn();
+    }
+});
+
+function updateBulkDeleteBtn() {
+    const checked = document.querySelectorAll(".issue-checkbox:checked").length;
+    const btn = document.getElementById("bulkDeleteIssuesBtn");
+    if (btn) btn.disabled = checked === 0;
+}
+
+// FEATURE 4: Bulk Delete Action
+document.getElementById("bulkDeleteIssuesBtn")?.addEventListener("click", async () => {
+    const checked = Array.from(document.querySelectorAll(".issue-checkbox:checked")).map(cb => cb.value);
+    if (!checked.length) return;
+    if (!confirm(`Delete ${checked.length} selected distribution records?\n\nThis action cannot be undone and will trigger an automatic review recalculation.`)) return;
+
+    try {
+        startProgress();
+        await window.uniformManager.bulkDeleteUniformIssues(checked);
+        state = await window.uniformManager.getState({ distributionLimit });
+        stopProgress();
+        render();
+        document.getElementById("selectAllIssues").checked = false;
+        updateBulkDeleteBtn();
+        toast(`Deleted ${checked.length} records.`);
+    } catch(error) {
+        stopProgress();
+        showImportError(error.message || "Bulk delete failed.");
+    }
+});
+
+// FEATURE 2: Raw Issue Edit and Delete
+document.addEventListener("click", async (event) => {
+    const editBtn = event.target.closest("[data-edit-raw-issue]");
+    if (editBtn) {
+        const id = editBtn.dataset.editRawIssue;
+        const row = state.uniformIssues.find(r => String(r.id) === id);
+        if (row) {
+            const form = document.getElementById("rawIssueForm");
+            form.elements.id.value = row.id;
+            form.elements.employee_code.value = row.employee_code;
+            form.elements.employee_name.value = row.employee_name;
+            form.elements.item_name.value = row.item_name;
+            form.elements.quantity.value = row.quantity;
+            form.elements.issued_at.value = row.issued_at ? row.issued_at.split('T')[0] : "";
+            form.elements.issue_month.value = row.issue_month || "";
+            form.elements.issue_year.value = row.issue_year || "";
+            form.elements.remarks.value = row.remarks || "";
+            document.getElementById("rawIssueModal").classList.add("show");
+        }
+        return;
+    }
+
+    const delBtn = event.target.closest("[data-delete-raw-issue]");
+    if (delBtn) {
+        const id = delBtn.dataset.deleteRawIssue;
+        if (!confirm(`Delete distribution record #${id}?\n\nThis will permanently remove the item from the employee's history and recalculate reviews.`)) return;
+        try {
+            startProgress();
+            await window.uniformManager.deleteUniformIssue(id);
+            state = await window.uniformManager.getState({ distributionLimit });
+            stopProgress();
+            render();
+            toast("Record deleted.");
+        } catch (error) {
+            stopProgress();
+            showImportError(error.message || "Delete failed.");
+        }
+        return;
+    }
+});
+
+document.getElementById("closeRawIssueModal")?.addEventListener("click", () => {
+    document.getElementById("rawIssueModal").classList.remove("show");
+});
+
+document.getElementById("rawIssueForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+        const formData = Object.fromEntries(new FormData(e.currentTarget).entries());
+        
+        startProgress();
+        await window.uniformManager.updateUniformIssue(formData);
+        state = await window.uniformManager.getState({ distributionLimit });
+        stopProgress();
+        document.getElementById("rawIssueModal").classList.remove("show");
+        render();
+        toast("Record updated successfully. Review Queue recalculated.");
+    } catch (error) {
+        stopProgress();
+        showImportError(error.message || "Update failed.");
+    }
 });

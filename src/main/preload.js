@@ -29,10 +29,14 @@ contextBridge.exposeInMainWorld("uniformManager", {
   deleteReview: (reviewId) => safeInvoke("app:deleteReview", reviewId),
   updateDistributionRow: (record) => safeInvoke("app:updateDistributionRow", record),
   deleteDistributionRow: (key) => safeInvoke("app:deleteDistributionRow", key),
+  updateUniformIssue: (issue) => safeInvoke("app:updateUniformIssue", issue),
+  deleteUniformIssue: (id) => safeInvoke("app:deleteUniformIssue", id),
+  bulkDeleteUniformIssues: (ids) => safeInvoke("app:bulkDeleteUniformIssues", ids),
   openDeductionReport: (filePath) => safeInvoke("app:openDeductionReport", filePath),
   updateEmployee: (employee) => safeInvoke("app:updateEmployee", employee),
   deleteEmployee: (employeeCode) => safeInvoke("app:deleteEmployee", employeeCode),
   resetOperationalData: () => safeInvoke("app:resetOperationalData"),
-  // Add this line inside the exposeInMainWorld block:
+  backupDatabase: () => safeInvoke("app:backupDatabase"),
+  restoreDatabase: () => safeInvoke("app:restoreDatabase"),
   exportExcel: (config) => safeInvoke("app:exportExcel", config),
 });
