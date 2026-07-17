@@ -86,12 +86,6 @@ function renderHistory() {
   }
 }
 
-// ISSUE 1 FIX: Topbar button NO LONGER triggers import. It strictly navigates to Import page.
-document.getElementById("importBtn")?.addEventListener("click", (e) => {
-  e.preventDefault();
-  setView("import");
-});
-
 // ISSUE 1 FIX: Page button now strictly owns the actual import execution.
 document.getElementById("goImportBtn")?.addEventListener("click", async (e) => {
   e.preventDefault();

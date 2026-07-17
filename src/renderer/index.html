@@ -48,19 +48,89 @@
 
       <section class="view active" id="dashboard">
         <div id="importError" class="error-panel"></div>
-        <div class="stats" id="dashboardStats" style="grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 16px;">
-          <article><span>Pending Reviews</span><strong id="dashPendingReviews">0</strong></article>
-          <article><span>Held Cases</span><strong id="dashHeldCases">0</strong></article>
-          <article><span>Waived Cases</span><strong id="dashWaivedCases">0</strong></article>
-          <article><span>Total Review Items</span><strong id="dashTotalReviews">0</strong></article>
-          <article><span>Today's Imports</span><strong id="dashTodayImports">0</strong></article>
-          <article><span>Employees Imported</span><strong id="dashEmployees">0</strong></article>
-          <article><span>Distribution Rows</span><strong id="dashDistRows">0</strong></article>
-          <article><span>Recovered Amount</span><strong id="dashRecovered">Rs. 0.00</strong></article>
+
+        <!-- QUICK ACTIONS -->
+        <div class="panel flush" style="margin-bottom: 18px; padding: 12px 18px; display: flex; gap: 10px; background: #131922;">
+          <strong style="margin-right: auto; align-self: center; color: var(--muted);">Quick Actions:</strong>
+          <button class="secondary" onclick="setView('import')">Import Excel</button>
+          <button class="secondary" onclick="setView('review')">Open Review Queue</button>
+          <button class="secondary" onclick="setView('deductions')">Open Reports</button>
+          <button class="secondary" onclick="setView('policies')">Open Policies</button>
+          <button class="secondary" onclick="setView('employees')">Open Employees</button>
         </div>
+
+        <!-- SUMMARY & STAT CARDS -->
+        <div class="stats" id="dashboardStats" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px;">
+          <article><span>Active Employees</span><strong id="dashActiveEmployees">0</strong></article>
+          <article><span>Total Employees</span><strong id="dashTotalEmployees">0</strong></article>
+          <article><span>Distribution Records</span><strong id="dashDistRows">0</strong></article>
+          <article><span>Employees w/ Excess</span><strong id="dashExcessEmployees">0</strong></article>
+
+          <article><span>Pending Reviews</span><strong class="text-amber" id="dashPendingReviews">0</strong></article>
+          <article><span>Total Reviews</span><strong id="dashTotalReviews">0</strong></article>
+          <article><span>Held Cases</span><strong class="text-blue" id="dashHeldCases">0</strong></article>
+          <article><span>Waived Cases</span><strong class="text-green" id="dashWaivedCases">0</strong></article>
+
+          <article><span>Deducted Cases</span><strong class="text-red" id="dashDeductedCases">0</strong></article>
+          <article><span>Recovered Amount</span><strong class="text-green" id="dashRecovered">Rs. 0.00</strong></article>
+
+          <article><span>Today's Imports</span><strong id="dashTodayImports">0</strong></article>
+          <article><span>This Month's Imports</span><strong id="dashMonthImports">0</strong></article>
+
+          <article><span>Units / Clients</span><strong id="dashUnits">0</strong></article>
+          <article><span>Inventory Items</span><strong id="dashInventoryItems">0</strong></article>
+          <article><span>Policies Configured</span><strong id="dashPolicies">0</strong></article>
+        </div>
+
+        <!-- LATEST IMPORT -->
         <div class="panel">
-          <h3>Latest Import Result</h3>
+          <h3>Latest Import History</h3>
           <div id="lastImport" class="empty">No workbook imported yet.</div>
+        </div>
+
+        <!-- TOP LISTS -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-bottom: 24px;">
+          
+          <div class="panel flush">
+            <div class="panel-heading"><h3>Top 10 Units by Excess</h3></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Unit</th><th>Excess Qty</th></tr></thead>
+                <tbody id="topUnitsExcess"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel flush">
+            <div class="panel-heading"><h3>Most Issued Items</h3></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Item</th><th>Issued Qty</th></tr></thead>
+                <tbody id="topIssuedItems"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel flush">
+            <div class="panel-heading"><h3>Top Employees by Recovery</h3></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Employee</th><th>Recovered</th></tr></thead>
+                <tbody id="topEmployeesRecovery"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel flush">
+            <div class="panel-heading"><h3>Most Common Excess Items</h3></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Item</th><th>Pending Excess Qty</th></tr></thead>
+                <tbody id="topCommonExcess"></tbody>
+              </table>
+            </div>
+          </div>
+
         </div>
       </section>
 

@@ -1,30 +1,56 @@
 function render() {
   if (!state) return;
   document.getElementById("dbPath").textContent = state.dbPath || "Unknown";
-  
-  document.getElementById("dashPendingReviews").textContent = state.reviewPendingCount || 0;
-  
-  const heldCount = (state.reviews || []).filter(r => r.status === 'Held' || r.status === 'Hold').length;
-  document.getElementById("dashHeldCases").textContent = heldCount;
-  
-  const waivedCount = (state.waiveRecords || []).length;
-  document.getElementById("dashWaivedCases").textContent = waivedCount;
-  
-  document.getElementById("dashTotalReviews").textContent = state.reviewTotalCount || 0;
-  
-  const todayStr = new Date().toISOString().split('T')[0];
-  const todayImports = (state.imports || []).filter(i => (i.imported_at || "").startsWith(todayStr)).length;
-  document.getElementById("dashTodayImports").textContent = todayImports;
-  
-  document.getElementById("dashEmployees").textContent = Array.isArray(state.employees) ? state.employees.length : 0;
-  
-  const matrixRows = state.uniformIssueMatrix?.rows;
-  document.getElementById("dashDistRows").textContent = state.uniformIssueMatrix?.totalRows ?? (Array.isArray(matrixRows) ? matrixRows.length : 0);
-  
-  const recoveredTotal = (state.salaryDeductions || []).reduce((sum, row) => sum + Number(row.amount || 0), 0);
-  document.getElementById("dashRecovered").textContent = `Rs. ${recoveredTotal.toFixed(2)}`;
 
+  const now = new Date();
+  const todayStr = now.toISOString().split('T')[0];
+  const monthStr = todayStr.substring(0, 7);
+
+  // Aggregating Stats
+  const employees = state.employees || [];
+  const activeEmployees = employees.filter(e => e.status === 'Active').length;
+  const uniqueUnits = new Set(employees.map(e => String(e.unit || "").trim()).filter(Boolean)).size;
+
+  const matrixRows = state.uniformIssueMatrix?.rows || [];
+  const excessEmployees = matrixRows.filter(r => r.total_excess > 0 || r.entitlement_status === 'Excess').length;
+
+  const imports = state.imports || [];
+  const todayImports = imports.filter(i => (i.imported_at || "").startsWith(todayStr)).length;
+  const monthImports = imports.filter(i => (i.imported_at || "").startsWith(monthStr)).length;
+
+  const salaryDeductions = state.salaryDeductions || [];
+  const recoveredTotal = salaryDeductions.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const deductedCases = salaryDeductions.length;
+
+  const heldCount = (state.reviews || []).filter(r => r.status === 'Held' || r.status === 'Hold').length;
+  const waivedCount = (state.waiveRecords || []).length;
+
+  // DOM Card Updates
+  document.getElementById("dashActiveEmployees").textContent = activeEmployees;
+  document.getElementById("dashTotalEmployees").textContent = employees.length;
+  document.getElementById("dashDistRows").textContent = state.uniformIssueMatrix?.totalRows ?? matrixRows.length;
+  document.getElementById("dashExcessEmployees").textContent = excessEmployees;
+
+  document.getElementById("dashPendingReviews").textContent = state.reviewPendingCount || 0;
+  document.getElementById("dashTotalReviews").textContent = state.reviewTotalCount || 0;
+  document.getElementById("dashHeldCases").textContent = heldCount;
+  document.getElementById("dashWaivedCases").textContent = waivedCount;
+
+  document.getElementById("dashDeductedCases").textContent = deductedCases;
+  document.getElementById("dashRecovered").textContent = formatCompactMoney(recoveredTotal);
+
+  document.getElementById("dashTodayImports").textContent = todayImports;
+  document.getElementById("dashMonthImports").textContent = monthImports;
+
+  document.getElementById("dashUnits").textContent = uniqueUnits;
+  document.getElementById("dashInventoryItems").textContent = (state.items || []).length;
+  document.getElementById("dashPolicies").textContent = (state.policies || []).length;
+
+  // Delegated Panel Updates
   renderLatestImport();
+  renderTopLists();
+
+  // Rendering Other Sub-modules
   renderEmployees();
   renderIssues();
   renderDeductions();
@@ -41,12 +67,73 @@ function renderLatestImport() {
     box.textContent = "No workbook imported yet.";
     return;
   }
+  
   box.className = "";
   const issueCount = Number(state.uniformIssueCount || state.uniformIssues.filter((row) => row.import_id === latest.id && Number(row.quantity || 0) > 0).length);
+  const dateStr = (latest.imported_at || "").replace("T", " ").substring(0, 19);
+
   box.innerHTML = `
-    <strong>${text(latest.file_name)}</strong>
-    <p>Detected sheet: <b>${text(latest.selected_sheet)}</b>. Employees inserted ${latest.inserted_count}, updated ${latest.updated_count}, skipped ${latest.skipped_count} from ${latest.total_rows} rows. Uniform item entries captured: ${issueCount}.</p>
+    <strong style="font-size: 16px;">${escapeHtml(latest.file_name)}</strong>
+    <p style="color: var(--muted); line-height: 1.6; margin-top: 8px;">
+      Import Date: <b style="color: var(--ink);">${dateStr}</b> | Processing Time: <b style="color: var(--ink);">${latest.duration_ms || 0} ms</b><br/>
+      Detected Sheet: <b style="color: var(--ink);">${escapeHtml(latest.selected_sheet)}</b><br/>
+      Employees Imported: <b>${latest.inserted_count}</b> new, <b>${latest.updated_count}</b> updated, <b>${latest.skipped_count}</b> skipped.<br/>
+      Distribution Rows / Item Entries Captured: <b>${issueCount}</b>.
+    </p>
   `;
+}
+
+function renderTopLists() {
+  // 1. Top 10 Units with highest excess
+  const unitExcessMap = new Map();
+  (state.uniformIssueMatrix?.rows || []).forEach(row => {
+     const u = String(row.unit || "Unknown").trim();
+     unitExcessMap.set(u, (unitExcessMap.get(u) || 0) + Number(row.total_excess || 0));
+  });
+  const topUnits = [...unitExcessMap.entries()]
+      .filter(([_, qty]) => qty > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+  renderHtml("topUnitsExcess", topUnits.map(([unit, qty]) => `<tr><td>${escapeHtml(unit)}</td><td>${qty}</td></tr>`).join(""), `<tr><td colspan="2" class="empty">No excess uniform data.</td></tr>`);
+
+  // 2. Top 10 Most Issued Items
+  const itemIssueMap = new Map();
+  (state.uniformIssues || []).forEach(row => {
+     if(Number(row.quantity) > 0) {
+       const item = String(row.item_name || "Unknown").trim();
+       itemIssueMap.set(item, (itemIssueMap.get(item) || 0) + Number(row.quantity || 0));
+     }
+  });
+  const topItems = [...itemIssueMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+  renderHtml("topIssuedItems", topItems.map(([item, qty]) => `<tr><td>${escapeHtml(item)}</td><td>${qty}</td></tr>`).join(""), `<tr><td colspan="2" class="empty">No items issued yet.</td></tr>`);
+
+  // 3. Top 10 Employees with highest recoveries
+  const empRecoveryMap = new Map();
+  (state.salaryDeductions || []).forEach(row => {
+     if(Number(row.amount) > 0) {
+       const label = `${row.employee_code} - ${row.employee_name}`;
+       empRecoveryMap.set(label, (empRecoveryMap.get(label) || 0) + Number(row.amount || 0));
+     }
+  });
+  const topRecoveries = [...empRecoveryMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+  renderHtml("topEmployeesRecovery", topRecoveries.map(([emp, amt]) => `<tr><td>${escapeHtml(emp)}</td><td>${formatCompactMoney(amt)}</td></tr>`).join(""), `<tr><td colspan="2" class="empty">No recoveries yet.</td></tr>`);
+
+  // 4. Most Common Excess Items (From Pending Reviews)
+  const excessItemMap = new Map();
+  (state.reviews || []).forEach(row => {
+     if(row.status === 'Pending' && Number(row.excess_qty) > 0) {
+        const item = String(row.item_name || "Unknown").trim();
+        excessItemMap.set(item, (excessItemMap.get(item) || 0) + Number(row.excess_qty));
+     }
+  });
+  const topExcessItems = [...excessItemMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+  renderHtml("topCommonExcess", topExcessItems.map(([item, qty]) => `<tr><td>${escapeHtml(item)}</td><td class="text-amber">${qty}</td></tr>`).join(""), `<tr><td colspan="2" class="empty">No pending excess items.</td></tr>`);
 }
 
 // ====== MODULE 10: BACKUP & RESTORE ======
