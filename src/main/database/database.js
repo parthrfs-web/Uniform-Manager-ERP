@@ -570,10 +570,14 @@ async function createDatabase(userDataPath) {
     save();
   }
 
-const moduleContext = { db, dbPath, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, ensureDefaultPoliciesForIssueRows, extractAmount, generateDeductionPdf };
+  const moduleContext = { db, dbPath, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, ensureDefaultPoliciesForIssueRows, extractAmount, generateDeductionPdf };
 
   const employeeModule = createEmployees(moduleContext);
   const reviewModule = createReviews(moduleContext);
+  
+  // FIXED: Expose bulkCreateReviews to context so imported issues can be correctly routed to review generation queue
+  moduleContext.bulkCreateReviews = reviewModule.bulkCreateReviews;
+  
   const importModule = createImports(moduleContext);
   const policyModule = createPolicies(moduleContext);
   const inventoryModule = createInventory(moduleContext);

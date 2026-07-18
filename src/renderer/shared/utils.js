@@ -26,10 +26,6 @@ function sortByText(rows, getValue) {
   return [...rows].sort((a, b) => text(getValue(a)).localeCompare(text(getValue(b))));
 }
 
-function formatMoney(value, prefix = "Rs.") {
-  return `${prefix} ${Number(value || 0).toFixed(2)}`;
-}
-
 function formatCompactMoney(value) {
   return `Rs. ${Number(value || 0).toFixed(2)}`;
 }

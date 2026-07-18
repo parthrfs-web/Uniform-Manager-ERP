@@ -29,7 +29,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       const saved = normalized.id
         ? all("SELECT * FROM uniform_items WHERE id = ?", [normalized.id])[0]
         : all("SELECT * FROM uniform_items WHERE item_code = ?", [normalized.item_code])[0];
-      audit("Item Saved", `${normalized.item_code} - ${normalized.item_name}`, {
+      audit("Item Saved", `${normalized.item_code} -${normalized.item_name}`, {
         entityType: "Inventory Item",
         entityId: saved?.id || normalized.item_code,
         oldValue: existing,
@@ -41,56 +41,55 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       const existing = all("SELECT id, item_code, item_name FROM uniform_items WHERE id = ?", [Number(itemId)])[0];
       if (!existing) throw new Error(`Item #${itemId} was not found.`);
       db.run("DELETE FROM uniform_items WHERE id = ?", [Number(itemId)]);
-      audit("Item Deleted", `${existing.item_code} - ${existing.item_name}`, {
+      audit("Item Deleted", `${existing.item_code} -${existing.item_name}`, {
         entityType: "Inventory Item",
         entityId: existing.id,
         oldValue: existing,
       });
       save();
     },
-    updateUniformIssue(issue) {
-      if (!issue.employee_code || !String(issue.employee_code).trim()) throw new Error("Employee code is required.");
-      if (!issue.item_name || !String(issue.item_name).trim()) throw new Error("Item name is required.");
-      if (Number(issue.quantity) < 0) throw new Error("Quantity cannot be negative.");
-      if (issue.issue_month && (Number(issue.issue_month) < 1 || Number(issue.issue_month) > 12)) throw new Error("Invalid month. Enter 1-12.");
-      if (issue.issue_year && (Number(issue.issue_year) < 1900 || Number(issue.issue_year) > 2100)) throw new Error("Invalid year.");
-
-      const existing = all("SELECT * FROM uniform_issues WHERE id = ?", [Number(issue.id)])[0];
-      if (!existing) throw new Error(`Distribution record #${issue.id} was not found.`);
-      db.run(
-        `UPDATE uniform_issues SET
-         issued_at = ?, issue_month = ?, issue_year = ?, item_name = ?, quantity = ?, remarks = ?
-         WHERE id = ?`,
-        [issue.issued_at, issue.issue_month || null, issue.issue_year || null, issue.item_name, issue.quantity, issue.remarks || "", issue.id]
-      );
-      const updated = all("SELECT * FROM uniform_issues WHERE id = ?", [Number(issue.id)])[0];
-      audit("Distribution Record Edited", `Record #${issue.id} for ${issue.employee_code}`, {
-        entityType: "Distribution",
-        entityId: issue.id,
-        oldValue: existing,
-        newValue: updated,
-      });
-      save();
+    updateDistributionRow(record) {
+      const { key, quantities } = record;
+      if (!key || !key.employee_code) throw new Error("Employee code is required.");
+      db.run("BEGIN TRANSACTION");
+      try {
+        const sqlBase = "FROM uniform_issues WHERE employee_code = ? AND lower(COALESCE(unit, '')) = lower(COALESCE(?, '')) AND lower(COALESCE(godown, '')) = lower(COALESCE(?, '')) AND COALESCE(issue_month, 0) = COALESCE(?, 0) AND COALESCE(issue_year, 0) = COALESCE(?, 0) AND lower(COALESCE(issue_period_label, '')) = lower(COALESCE(?, ''))";
+        const params = [
+          key.employee_code, key.unit || "", key.godown || "",
+          key.issue_month ? Number(key.issue_month) : 0,
+          key.issue_year ? Number(key.issue_year) : 0,
+          key.issue_period_label || ""
+        ];
+        db.run(`DELETE ${sqlBase}`, params);
+        
+        const stmt = db.prepare(`INSERT INTO uniform_issues (employee_code, employee_name, unit, godown, item_name, quantity, issue_month, issue_year, issue_period_label, source_sheet, source_row, issued_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Manual', 0, ?)`);
+        const empName = scalar("SELECT employee_name FROM employees WHERE employee_code = ?", [key.employee_code]) || "Unknown";
+        const issuedAt = now();
+        
+        for (const [itemName, qty] of Object.entries(quantities || {})) {
+          if (Number(qty) > 0) {
+            stmt.run([key.employee_code, empName, key.unit || "", key.godown || "", itemName, Number(qty), key.issue_month || null, key.issue_year || null, key.issue_period_label || "", issuedAt]);
+          }
+        }
+        stmt.free();
+        db.run("COMMIT");
+        audit("Distribution Row Updated", `Manual update for matrix row for ${key.employee_code}`);
+        save();
+      } catch (error) {
+        db.run("ROLLBACK");
+        throw error;
+      }
     },
-    deleteUniformIssue(id) {
-      const existing = all("SELECT * FROM uniform_issues WHERE id = ?", [Number(id)])[0];
-      db.run(`DELETE FROM uniform_issues WHERE id = ?`, [Number(id)]);
-      audit("Distribution Record Deleted", `Record #${id}`, {
-        entityType: "Distribution",
-        entityId: id,
-        oldValue: existing,
-      });
-      save();
-    },
-    bulkDeleteUniformIssues(ids) {
-      if (!ids || !ids.length) return;
-      const placeholders = ids.map(() => '?').join(',');
-      const existing = all(`SELECT * FROM uniform_issues WHERE id IN (${placeholders})`, ids.map(Number));
-      db.run(`DELETE FROM uniform_issues WHERE id IN (${placeholders})`, ids.map(Number));
-      audit("Bulk Delete", `Deleted ${ids.length} distribution records.`, {
-        entityType: "Distribution",
-        oldValue: existing,
-      });
+    deleteDistributionRow(key) {
+      if (!key || !key.employee_code) throw new Error("Employee code is required.");
+      const params = [
+        key.employee_code, key.unit || "", key.godown || "",
+        key.issue_month ? Number(key.issue_month) : 0,
+        key.issue_year ? Number(key.issue_year) : 0,
+        key.issue_period_label || ""
+      ];
+      db.run(`DELETE FROM uniform_issues WHERE employee_code = ? AND lower(COALESCE(unit, '')) = lower(COALESCE(?, '')) AND lower(COALESCE(godown, '')) = lower(COALESCE(?, '')) AND COALESCE(issue_month, 0) = COALESCE(?, 0) AND COALESCE(issue_year, 0) = COALESCE(?, 0) AND lower(COALESCE(issue_period_label, '')) = lower(COALESCE(?, ''))`, params);
+      audit("Distribution Row Deleted", `Deleted matrix row for ${key.employee_code}`);
       save();
     }
 });

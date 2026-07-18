@@ -1,4 +1,4 @@
-module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, ensureDefaultPoliciesForIssueRows, extractAmount, generateDeductionPdf }) => ({
+module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, ensureDefaultPoliciesForIssueRows, extractAmount, generateDeductionPdf, bulkCreateReviews }) => ({
     recordImport(importRecord) {
       db.run(
         `INSERT INTO imports (
@@ -98,7 +98,6 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       return created;
     },
     
-    // ISSUE 2 FIX: Moved synchronous blocking algorithm into a chunkable process
     evaluateEntitlementsForImport(importId, progressCallback) {
       const importedIssues = importId 
         ? all("SELECT * FROM uniform_issues WHERE import_id = ? AND quantity > 0", [Number(importId)])
@@ -132,23 +131,6 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       const total = importedIssues.length;
 
       const issueKey = (issue) => issue.id || `${issue.import_id}:${issue.source_sheet}:${issue.source_row}:${issue.employee_code}:${issue.item_name}`;
-      const buildPeriodScope = (issue, tableAlias = "") => {
-        const prefix = tableAlias ? `${tableAlias}.` : "";
-        const sql = [
-          `COALESCE(${prefix}issue_month, 0) = COALESCE(?, 0)`,
-          `COALESCE(${prefix}issue_year, 0) = COALESCE(?, 0)`,
-          `lower(COALESCE(${prefix}issue_period_label, '')) = lower(COALESCE(?, ''))`,
-        ].join(" AND ");
-        return {
-          sql: ` AND ${sql}`,
-          params: [
-            issue.issue_month ? Number(issue.issue_month) : null,
-            issue.issue_year ? Number(issue.issue_year) : null,
-            issue.issue_period_label || "",
-          ],
-          key: `${issue.issue_month || 0}|${issue.issue_year || 0}|${String(issue.issue_period_label || "").toLowerCase()}`,
-        };
-      };
       
       const logReviewGeneration = (issue, created, note = "") => {
         console.log(
@@ -177,10 +159,8 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           if (processedIssueIds.has(sourceIssueKey)) continue;
           processedIssueIds.add(sourceIssueKey);
 
-          const periodScope = buildPeriodScope(issue);
-          const periodKey = periodScope.key;
-          
-          const key = `${issue.employee_code}|${issue.unit}|${issue.item_name}|${periodKey}`.toLowerCase();
+          // ENHANCEMENT: Grouping exclusively by Employee, Unit, and Item. Removing the Period split.
+          const key = `${issue.employee_code}|${issue.unit}|${issue.item_name}`.toLowerCase();
           
           if (checked.has(key)) continue;
           checked.add(key);
@@ -190,15 +170,12 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
 
           if (!policy) {
             const params = [issue.employee_code, issue.item_name, issue.unit || ""];
-            params.push(...periodScope.params);
-            
             if (importId) params.push(Number(importId));
 
             const importedQuantity = scalar(
               `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
                WHERE employee_code = ? AND lower(item_name) = lower(?)
                  AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-                 ${periodScope.sql}
                  ${importId ? "AND import_id = ?" : ""}`,
               params
             );
@@ -208,9 +185,9 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
               employee_name: issue.employee_name,
               unit: issue.unit || "",
               item_name: issue.item_name,
-              issue_month: issue.issue_month || null,
-              issue_year: issue.issue_year || null,
-              issue_period_label: issue.issue_period_label || "",
+              issue_month: null,
+              issue_year: null,
+              issue_period_label: "Summary",
               issued_qty: importedQuantity,
               allowed_qty: null,
               excess_qty: importedQuantity,
@@ -225,9 +202,8 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
             const issuedQuantity = scalar(
               `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
                WHERE employee_code = ? AND lower(item_name) = lower(?)
-               AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-               ${periodScope.sql}`,
-              [issue.employee_code, issue.item_name, issue.unit || "", ...periodScope.params]
+               AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))`,
+              [issue.employee_code, issue.item_name, issue.unit || ""]
             );
             const allowed = Number(policy.yearly_entitlement || 0);
             
@@ -235,17 +211,15 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
               `SELECT COALESCE(SUM(excess_qty), 0) FROM review_queue
                WHERE employee_code = ? AND lower(item_name) = lower(?)
                  AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-                 AND status IN ('Waived', 'Deducted', 'Deduct')
-                 ${periodScope.sql}`,
-              [issue.employee_code, issue.item_name, issue.unit || "", ...periodScope.params]
+                 AND status IN ('Waived', 'Deducted', 'Deduct')`,
+              [issue.employee_code, issue.item_name, issue.unit || ""]
             );
             const unresolvedQuantity = scalar(
               `SELECT COALESCE(SUM(excess_qty), 0) FROM review_queue
                WHERE employee_code = ? AND lower(item_name) = lower(?)
                  AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-                 AND status IN ('Pending', 'Held', 'Hold')
-                 ${periodScope.sql}`,
-              [issue.employee_code, issue.item_name, issue.unit || "", ...periodScope.params]
+                 AND status IN ('Pending', 'Held', 'Hold')`,
+              [issue.employee_code, issue.item_name, issue.unit || ""]
             );
 
             if (issuedQuantity > allowed + settledQuantity + unresolvedQuantity) {
@@ -256,9 +230,9 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
                 employee_name: issue.employee_name,
                 unit: issue.unit || "",
                 item_name: issue.item_name,
-                issue_month: issue.issue_month || null,
-                issue_year: issue.issue_year || null,
-                issue_period_label: issue.issue_period_label || "",
+                issue_month: null,
+                issue_year: null,
+                issue_period_label: "Summary",
                 issued_qty: issuedQuantity,
                 allowed_qty: allowed,
                 excess_qty: excess,
@@ -280,7 +254,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
             console.log(`Review rows generated: ${rajjanReviews}\n`);
         }
 
-        this.bulkCreateReviews(reviewRows);
+        bulkCreateReviews(reviewRows);
         if (reviewRows.length) {
           audit("Entitlement Review Generated", `${reviewRows.length} imported issue rows need review.`, {
             entityType: "Review",
@@ -292,13 +266,11 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         return reviewRows.length;
       };
 
-      // ISSUE 2 FIX: If no progress callback is passed (i.e. importer CLI tests), do sync execution
       if (!progressCallback) {
           processBatch(0, total);
           return finalize();
       }
 
-      // ISSUE 2 FIX: If progress callback provided (i.e. electron app commit process), yield safely
       return (async () => {
           const BATCH_SIZE = 25;
           for (let i = 0; i < total; i += BATCH_SIZE) {
@@ -310,7 +282,6 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       })();
     },
     
-    // ISSUE 2 FIX: Safely handles both async UI context and purely sync CLI context
     recalculateReviews(onProgress) {
       db.run("DELETE FROM review_queue WHERE status = 'Pending'");
       

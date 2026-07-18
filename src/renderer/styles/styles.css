@@ -184,15 +184,6 @@ button:disabled { cursor: wait; opacity: 0.72; }
 
 .toolbar { margin-bottom: 14px; }
 .toolbar input { width: 420px; max-width: 100%; background: #111821; color: var(--ink); }
-.filter-button {
-  background: #202938;
-  color: var(--ink);
-}
-.filter-button.active {
-  background: var(--blue);
-  border-color: var(--blue);
-  color: #fff;
-}
 
 .table-wrap {
   overflow: auto;
@@ -256,7 +247,6 @@ td.reason { white-space: normal; min-width: 240px; }
   color: var(--blue);
 }
 
-/* MODULE 5G: Strict Badge Styling */
 .badge.Pending { color: var(--amber); background: #342817; }
 .badge.Deducted { color: var(--red); background: #3a2027; }
 .badge.Waived { color: var(--green); background: #193124; }
@@ -264,7 +254,6 @@ td.reason { white-space: normal; min-width: 240px; }
 
 .badge.low { color: var(--red); background: #3a2027; }
 
-/* Review Card Hover Effects */
 .review-card {
   transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
@@ -274,7 +263,6 @@ td.reason { white-space: normal; min-width: 240px; }
   border-left-width: 6px !important;
 }
 
-/* Spinner */
 .spinner {
   width: 36px;
   height: 36px;
@@ -286,7 +274,6 @@ td.reason { white-space: normal; min-width: 240px; }
 }
 @keyframes spin { 100% { transform: rotate(360deg); } }
 
-/* Utility Text Colors */
 .text-amber { color: var(--amber); }
 .text-red { color: var(--red); }
 .text-green { color: var(--green); }

@@ -46,16 +46,6 @@
       <section class="view active" id="dashboard">
         <div id="importError" class="error-panel"></div>
 
-        <!-- QUICK ACTIONS -->
-        <div class="panel flush" style="margin-bottom: 18px; padding: 12px 18px; display: flex; gap: 10px; background: #131922;">
-          <strong style="margin-right: auto; align-self: center; color: var(--muted);">Quick Actions:</strong>
-          <button class="secondary" onclick="setView('import')">Import Excel</button>
-          <button class="secondary" onclick="setView('review')">Open Review Queue</button>
-          <button class="secondary" onclick="setView('deductions')">Open Reports</button>
-          <button class="secondary" onclick="setView('policies')">Open Policies</button>
-          <button class="secondary" onclick="setView('employees')">Open Employees</button>
-        </div>
-
         <!-- SUMMARY & STAT CARDS -->
         <div class="stats" id="dashboardStats" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px;">
           <article><span>Active Employees</span><strong id="dashActiveEmployees">0</strong></article>
@@ -171,8 +161,8 @@
         </div>
         <div class="panel">
           <div class="panel-title-row">
-            <h3>Employee Distribution Register</h3>
-            <div class="row-actions">
+            <h3 style="margin-bottom: 15px;">Employee Distribution Register</h3>
+            <div class="row-actions" style="margin-bottom: 15px;">
               <button id="loadMoreDistributionBtn" type="button">Load More</button>
               <button id="loadAllDistributionBtn" type="button">Load All</button>
               <button class="secondary" data-export="history">Export Excel</button>
@@ -238,9 +228,12 @@
 
       <section class="view" id="review">
         <div id="reviewStage1">
-          <div class="toolbar" style="display: flex; justify-content: space-between;">
-            <button id="recalculateReviewsBtn" class="secondary" type="button">Recalculate Reviews</button>
-            <button class="secondary" data-export="pendingReview">Export Excel</button>
+          <div class="toolbar" style="display: flex; justify-content: space-between; align-items: center;">
+            <input id="reviewSearchInput" placeholder="Search by Code, Name, Unit" style="width: 320px; max-width: 100%; background: #111821; color: var(--ink);" />
+            <div style="display: flex; gap: 10px;">
+              <button id="recalculateReviewsBtn" class="secondary" type="button">Recalculate Reviews</button>
+              <button class="secondary" data-export="pendingReview">Export Excel</button>
+            </div>
           </div>
           <div class="panel flush">
             <div class="table-wrap">

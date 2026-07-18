@@ -22,12 +22,6 @@ function hideReviewDecisionModal() {
   document.getElementById("reviewDecisionModal").classList.remove("show");
 }
 
-function reviewExcessQty(row) {
-  const issued = Number(row.issued_qty || 0);
-  const allowed = row.allowed_qty === null || row.allowed_qty === undefined ? 0 : Number(row.allowed_qty || 0);
-  return Math.max(0, issued - allowed);
-}
-
 function reviewStatusLabel(status) {
   return status === "Pending" ? "Review Required" : status;
 }
@@ -56,18 +50,6 @@ async function renderReviewStage1() {
   document.getElementById("reviewStage1").style.display = "block";
   document.getElementById("reviewStage2").style.display = "none";
   document.getElementById("reviewStage3").style.display = "none";
-
-  const toolbar = document.querySelector("#reviewStage1 .toolbar");
-  if (toolbar && !document.getElementById("reviewSearchInput")) {
-    const searchInput = document.createElement("input");
-    searchInput.id = "reviewSearchInput";
-    searchInput.placeholder = "Search by Code, Name, Unit";
-    searchInput.addEventListener("input", (e) => {
-      reviewSearchText = e.target.value.toLowerCase();
-      renderReviewStage1Rows(summaryCache);
-    });
-    toolbar.appendChild(searchInput);
-  }
 
   try {
     summaryCache = await window.uniformManager.getReviewQueueStage1();
@@ -122,12 +104,11 @@ async function loadReviewStage2(emp) {
     let amounts = { Pending: 0, Deducted: 0, Waived: 0, Held: 0 };
     let grandTotal = 0;
 
-    // ISSUE 3 FIX: Card distinctly renders Employee details, Issue/Allowed Matrix, and clear spacing
     document.getElementById("reviewStage2Cards").innerHTML = currentStage2Items.map(row => {
       const status = row.status || 'Pending';
       const isPending = status === 'Pending';
       
-      const qty = reviewExcessQty(row);
+      const qty = Number(row.excess_qty || 0);
       const rate = Number(row.live_rate !== undefined ? row.live_rate : (row.item_cost || 0));
       const amount = qty * rate;
       
@@ -248,17 +229,6 @@ document.getElementById("backToStage2Btn")?.addEventListener("click", () => {
   }
 });
 
-document.querySelectorAll("[data-review-filter]").forEach((button) => {
-  button.addEventListener("click", (e) => {
-    e.preventDefault();
-    reviewFilter = button.dataset.reviewFilter;
-    document.querySelectorAll("[data-review-filter]").forEach((el) => {
-      el.classList.toggle("active", el.dataset.reviewFilter === reviewFilter);
-    });
-    renderReviews();
-  });
-});
-
 document.getElementById("recalculateReviewsBtn")?.addEventListener("click", async () => {
   if (!desktopApi) return showImportError("Works only in Desktop App.");
   try {
@@ -352,4 +322,9 @@ document.addEventListener("click", async (event) => {
     }
     return;
   }
+});
+
+document.getElementById("reviewSearchInput")?.addEventListener("input", (e) => {
+  reviewSearchText = e.target.value.toLowerCase();
+  renderReviewStage1Rows(summaryCache);
 });

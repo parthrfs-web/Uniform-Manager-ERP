@@ -17,6 +17,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       if (!reviewRows.length) return;
       const createdAt = now();
       
+      // Removed period scope conflict checks. We merge matching employee + items automatically.
       const checkStmt = db.prepare(`
         SELECT id 
         FROM review_queue 
@@ -24,9 +25,6 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           AND employee_code = ? 
           AND lower(item_name) = lower(?)
           AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-          AND COALESCE(issue_month, 0) = COALESCE(?, 0)
-          AND COALESCE(issue_year, 0) = COALESCE(?, 0)
-          AND lower(COALESCE(issue_period_label, '')) = lower(COALESCE(?, ''))
       `);
       
       const updateStmt = db.prepare(`
@@ -52,10 +50,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           checkStmt.bind([
             row.employee_code,
             row.item_name || "",
-            row.unit || "",
-            row.issue_month ? Number(row.issue_month) : null,
-            row.issue_year ? Number(row.issue_year) : null,
-            row.issue_period_label || "",
+            row.unit || ""
           ]);
           
           let existingId = null;
@@ -207,9 +202,6 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         LEFT JOIN review_queue r 
           ON ${identityFilter.reviewSql} 
           AND lower(TRIM(i.item_name)) = lower(TRIM(r.item_name)) 
-          AND COALESCE(i.issue_month, 0) = COALESCE(r.issue_month, 0) 
-          AND COALESCE(i.issue_year, 0) = COALESCE(r.issue_year, 0)
-          AND lower(TRIM(COALESCE(i.issue_period_label, ''))) = lower(TRIM(COALESCE(r.issue_period_label, '')))
         WHERE ${identityFilter.issueSql} 
           AND lower(TRIM(i.item_name)) = lower(TRIM(?))
           AND i.quantity > 0

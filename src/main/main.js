@@ -282,10 +282,8 @@ ipcMain.handle("app:commitImport", async (event) => {
   }
 });
 
-// ====== BACKUP & RESTORE MODULE ======
-
 ipcMain.handle("app:backupDatabase", async () => handleSafe(async () => {
-  db.save(); // Ensure all pending memory changes are flushed to disk
+  db.save();
   
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
@@ -318,7 +316,6 @@ ipcMain.handle("app:restoreDatabase", async () => handleSafe(async () => {
 
   const filePath = result.filePaths[0];
 
-  // 1. File Signature Validation
   const buffer = Buffer.alloc(16);
   const fd = fs.openSync(filePath, 'r');
   fs.readSync(fd, buffer, 0, 16, 0);
@@ -328,7 +325,6 @@ ipcMain.handle("app:restoreDatabase", async () => handleSafe(async () => {
     throw new Error("Invalid backup file. The selected file is not a valid SQLite database.");
   }
 
-  // 2. Schema Compatibility Validation
   const SQL = await initSqlJs();
   let tempDb;
   try {
@@ -345,17 +341,12 @@ ipcMain.handle("app:restoreDatabase", async () => handleSafe(async () => {
     if (tempDb) tempDb.close();
   }
 
-  // 3. Execute Restore
   fs.copyFileSync(filePath, db.dbPath);
-
-  // 4. Application Restart automatically reloads the DB file from disk
   app.relaunch();
   app.exit(0);
 
   return { canceled: false };
 }));
-
-// =====================================
 
 ipcMain.handle("app:getReviewQueueStage1", () => handleSafe(() => db.getReviewQueueStage1()));
 ipcMain.handle("app:getReviewQueueStage2", (_event, code) => handleSafe(() => db.getReviewQueueStage2(code)));
