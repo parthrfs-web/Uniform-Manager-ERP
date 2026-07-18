@@ -101,7 +101,10 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         updateStmt.free();
         insertStmt.free();
       }
-      audit("Reviews Bulk Created", `${reviewRows.length} review rows processed (inserted/updated) from import.`);
+      audit("Reviews Bulk Created", `${reviewRows.length} review rows processed (inserted/updated) from import.`, {
+        entityType: "Review",
+        result: "Success",
+      });
     },
     getReviewQueueStage1() {
       return all(`
@@ -235,7 +238,11 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       db.run("DELETE FROM review_decisions WHERE review_id = ?", [Number(reviewId)]);
       db.run("DELETE FROM salary_deductions WHERE review_id = ?", [Number(reviewId)]);
       db.run("DELETE FROM waive_records WHERE review_id = ?", [Number(reviewId)]);
-      audit("Review Deleted", `Review #${reviewId}: ${review.employee_code}`);
+      audit("Review Deleted", `Review #${reviewId}: ${review.employee_code}`, {
+        entityType: "Review",
+        entityId: review.id,
+        oldValue: review,
+      });
       save();
     },
     updateReview(action) {
@@ -247,7 +254,12 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         db.run("DELETE FROM review_decisions WHERE review_id = ?", [Number(action.id)]);
         db.run("DELETE FROM salary_deductions WHERE review_id = ?", [Number(action.id)]);
         db.run("DELETE FROM waive_records WHERE review_id = ?", [Number(action.id)]);
-        audit("Review Reverted", `Review #${action.id} reverted to Pending.`);
+        audit("Review Reverted", `Review #${action.id} reverted to Pending.`, {
+          entityType: "Review",
+          entityId: action.id,
+          oldValue: review,
+          newValue: { ...review, status: "Pending", remarks: null, decided_at: null },
+        });
         save();
         return;
       }
@@ -290,7 +302,13 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           const deduction = all("SELECT * FROM salary_deductions WHERE review_id = ? ORDER BY id DESC LIMIT 1", [Number(action.id)])[0];
           const pdfPath = generateDeductionPdf(review, deduction, approvedBy, reason || review.reason, remarks);
           db.run("UPDATE salary_deductions SET pdf_path = ?, exported_at = ? WHERE id = ?", [pdfPath, now(), deduction.id]);
-          audit("Salary Deduction Created", `Review #${action.id}: ${review.employee_code}`);
+          audit("Salary Deduction Created", `Review #${action.id}: ${review.employee_code}`, {
+            entityType: "Review",
+            entityId: action.id,
+            oldValue: review,
+            newValue: { deduction, pdf_path: pdfPath },
+            remarks: reason || review.reason,
+          });
         }
       }
       
@@ -301,10 +319,21 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
             `INSERT INTO waive_records (review_id, employee_code, employee_name, unit, reason, remarks, approved_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [Number(action.id), review.employee_code, review.employee_name, review.unit || "", review.reason, remarks || reason, approvedBy, now()]
           );
-          audit("Waive Record Created", `Review #${action.id}: ${review.employee_code}`);
+          audit("Waive Record Created", `Review #${action.id}: ${review.employee_code}`, {
+            entityType: "Review",
+            entityId: action.id,
+            oldValue: review,
+            newValue: { status: action.status, reason, approved_by: approvedBy, remarks },
+          });
         }
       }
-      audit("Review Decision", `#${action.id} marked ${action.status} by ${approvedBy}`);
+      audit("Review Decision", `#${action.id} marked ${action.status} by ${approvedBy}`, {
+        entityType: "Review",
+        entityId: action.id,
+        oldValue: review,
+        newValue: { ...review, status: action.status, remarks: remarks || reason, decided_at: now() },
+        remarks: reason || remarks || review.reason,
+      });
       save();
     }
 });

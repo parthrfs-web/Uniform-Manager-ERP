@@ -13,13 +13,17 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       }
 
       if (normalizedPolicy.id) {
-        const exists = scalar("SELECT COUNT(*) FROM unit_policies WHERE id = ?", [normalizedPolicy.id]);
-        if (!exists) throw new Error(`Policy #${policy.id} was not found.`);
+        var existing = all("SELECT * FROM unit_policies WHERE id = ?", [normalizedPolicy.id])[0];
+        if (!existing) throw new Error(`Policy #${policy.id} was not found.`);
         db.run(
           `UPDATE unit_policies SET unit = ?, item_name = ?, yearly_entitlement = ?, item_cost = ? WHERE id = ?`,
           [normalizedPolicy.unit, normalizedPolicy.item_name, normalizedPolicy.yearly_entitlement, normalizedPolicy.item_cost, normalizedPolicy.id]
         );
       } else {
+        var existing = all(
+          "SELECT * FROM unit_policies WHERE lower(unit) = lower(?) AND lower(item_name) = lower(?)",
+          [normalizedPolicy.unit, normalizedPolicy.item_name]
+        )[0] || null;
         db.run(
           `INSERT INTO unit_policies (unit, item_name, yearly_entitlement, item_cost)
            VALUES (?, ?, ?, ?)
@@ -29,7 +33,18 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           [normalizedPolicy.unit, normalizedPolicy.item_name, normalizedPolicy.yearly_entitlement, normalizedPolicy.item_cost]
         );
       }
-      audit("Policy Changed", `${normalizedPolicy.unit}: ${normalizedPolicy.item_name}`);
+      const saved = normalizedPolicy.id
+        ? all("SELECT * FROM unit_policies WHERE id = ?", [normalizedPolicy.id])[0]
+        : all(
+            "SELECT * FROM unit_policies WHERE lower(unit) = lower(?) AND lower(item_name) = lower(?)",
+            [normalizedPolicy.unit, normalizedPolicy.item_name]
+          )[0];
+      audit("Policy Changed", `${normalizedPolicy.unit}: ${normalizedPolicy.item_name}`, {
+        entityType: "Policy",
+        entityId: saved?.id || normalizedPolicy.id || `${normalizedPolicy.unit}:${normalizedPolicy.item_name}`,
+        oldValue: existing,
+        newValue: saved || normalizedPolicy,
+      });
       save();
       return normalizedPolicy;
     },
@@ -37,7 +52,11 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       const existing = all("SELECT id, unit, item_name FROM unit_policies WHERE id = ?", [Number(policyId)])[0];
       if (!existing) throw new Error(`Policy #${policyId} was not found.`);
       db.run("DELETE FROM unit_policies WHERE id = ?", [Number(policyId)]);
-      audit("Policy Deleted", `${existing.unit}: ${existing.item_name}`);
+      audit("Policy Deleted", `${existing.unit}: ${existing.item_name}`, {
+        entityType: "Policy",
+        entityId: existing.id,
+        oldValue: existing,
+      });
       save();
     }
 });

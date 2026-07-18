@@ -22,7 +22,11 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           importRecord.status || 'Completed'
         ]
       );
-      audit("Excel Imported", `${importRecord.fileName} sheet ${importRecord.selectedSheet}`);
+      audit("Excel Imported", `${importRecord.fileName} sheet ${importRecord.selectedSheet}`, {
+        entityType: "Import",
+        newValue: importRecord,
+        remarks: `${importRecord.inserted || 0} inserted, ${importRecord.updated || 0} updated`,
+      });
       save();
       return scalar("SELECT MAX(id) FROM imports");
     },
@@ -85,7 +89,10 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
     ensureDefaultPoliciesForImport(importId) {
       const created = ensureDefaultPoliciesForIssueRows(importId);
       if (created) {
-        audit("Default Policies Created", `${created} unit/item policy rows created with allowed qty 0.`);
+        audit("Default Policies Created", `${created} unit/item policy rows created with allowed qty 0.`, {
+          entityType: "Policy",
+          entityId: importId || null,
+        });
         save();
       }
       return created;
@@ -275,7 +282,11 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
 
         this.bulkCreateReviews(reviewRows);
         if (reviewRows.length) {
-          audit("Entitlement Review Generated", `${reviewRows.length} imported issue rows need review.`);
+          audit("Entitlement Review Generated", `${reviewRows.length} imported issue rows need review.`, {
+            entityType: "Review",
+            entityId: importId || null,
+            newValue: { generated: reviewRows.length },
+          });
           save();
         }
         return reviewRows.length;
@@ -305,7 +316,10 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       
       if (!onProgress) {
           const generated = this.evaluateEntitlementsForImport(null);
-          audit("Review Queue Recalculated", `${generated} pending review rows generated from current policies.`);
+          audit("Review Queue Recalculated", `${generated} pending review rows generated from current policies.`, {
+            entityType: "Review",
+            newValue: { generated },
+          });
           save();
           return generated;
       }
@@ -314,7 +328,10 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           const generated = await this.evaluateEntitlementsForImport(null, (processed, total) => {
               if (onProgress) onProgress(null, 1, 1, processed, total);
           });
-          audit("Review Queue Recalculated", `${generated} pending review rows generated from current policies.`);
+          audit("Review Queue Recalculated", `${generated} pending review rows generated from current policies.`, {
+            entityType: "Review",
+            newValue: { generated },
+          });
           save();
           return generated;
       })();
@@ -334,7 +351,10 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         db.run("ROLLBACK");
         throw error;
       }
-      audit("Operational Data Reset", "Employees, distribution register, review queue and deduction records cleared. Unit policies were kept.");
+      audit("Operational Data Reset", "Employees, distribution register, review queue and deduction records cleared. Unit policies were kept.", {
+        entityType: "System",
+        remarks: "Unit policies and item settings were kept.",
+      });
       save();
     }
 });

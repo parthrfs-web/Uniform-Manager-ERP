@@ -99,7 +99,7 @@ main {
 }
 .topbar h2 { margin: 0; font-size: 24px; }
 .topbar p { margin: 4px 0 0; color: var(--muted); }
-.actions, .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
 button, input, select {
   border-radius: 6px;

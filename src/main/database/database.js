@@ -8,6 +8,7 @@ const createImports = require("./imports");
 const createPolicies = require("./policies");
 const createInventory = require("./inventory");
 const createReports = require("./reports");
+const createAudit = require("./audit");
 
 const ignoredIssueItemSignals = [
   "month", "year", "date", "sr no", "serial", "reg no", "register", "total qty", "total quantity",
@@ -195,6 +196,12 @@ const APP_SCHEMA = {
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
     "action TEXT NOT NULL",
     "details TEXT NOT NULL",
+    "entity_type TEXT",
+    "entity_id TEXT",
+    "old_value TEXT",
+    "new_value TEXT",
+    "result TEXT DEFAULT 'Success'",
+    "remarks TEXT",
     "created_at TEXT NOT NULL"
   ]
 };
@@ -235,8 +242,27 @@ async function createDatabase(userDataPath) {
     return rows;
   }
 
-  function audit(action, details) {
-    db.run("INSERT INTO audit_log (action, details, created_at) VALUES (?, ?, ?)", [action, details, now()]);
+  function audit(action, details, extended = {}) {
+    const stringify = (value) => {
+      if (value === undefined || value === null) return null;
+      return typeof value === "string" ? value : JSON.stringify(value);
+    };
+    db.run(
+      `INSERT INTO audit_log (
+        action, details, entity_type, entity_id, old_value, new_value, result, remarks, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        action,
+        details,
+        extended.entityType || extended.entity_type || null,
+        extended.entityId || extended.entity_id || null,
+        stringify(extended.oldValue ?? extended.old_value),
+        stringify(extended.newValue ?? extended.new_value),
+        extended.result || "Success",
+        extended.remarks || null,
+        now(),
+      ]
+    );
   }
 
   function syncSchema() {
@@ -552,6 +578,7 @@ const moduleContext = { db, dbPath, scalar, all, save, audit, now, normalizeLabe
   const policyModule = createPolicies(moduleContext);
   const inventoryModule = createInventory(moduleContext);
   const reportModule = createReports(moduleContext);
+  const auditModule = createAudit(moduleContext);
 
   return {
     dbPath,
@@ -563,6 +590,7 @@ const moduleContext = { db, dbPath, scalar, all, save, audit, now, normalizeLabe
     ...policyModule,
     ...inventoryModule,
     ...reportModule,
+    ...auditModule,
   };
 }
 
