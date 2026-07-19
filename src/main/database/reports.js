@@ -85,8 +85,15 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         employeeRow.entitlement_status = employeeRow.has_missing_policy ? "Missing Policy" : employeeRow.has_excess ? "Excess" : "OK";
       });
       
-      const reviews = all("SELECT * FROM review_queue ORDER BY CASE WHEN status = 'Pending' THEN 0 ELSE 1 END, created_at ASC, id ASC LIMIT 500")
-        .map((row) => ({ ...row, category: classifyReviewReason(row.reason) }));
+      const reviews = all(`
+          SELECT r.*, 
+              (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Pending') as pending_qty,
+              (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Deduct') as deduct_qty,
+              (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Waive') as waive_qty,
+              (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Hold') as hold_qty
+          FROM review_queue r 
+          ORDER BY CASE WHEN r.status = 'Pending' THEN 0 ELSE 1 END, r.created_at ASC, r.id ASC LIMIT 500
+      `).map((row) => ({ ...row, category: classifyReviewReason(row.reason) }));
         
       const reviewSummaryRows = all("SELECT reason, status, COUNT(*) AS row_count FROM review_queue GROUP BY reason, status");
       const missingPolicySuggestions = all(
@@ -121,9 +128,27 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         policies,
         items: all("SELECT *, CASE WHEN available_stock <= minimum_stock THEN 1 ELSE 0 END AS is_low_stock FROM uniform_items ORDER BY item_name, size"),
         stockMovements: all("SELECT * FROM stock_movements ORDER BY created_at DESC, id DESC LIMIT 100"),
-        salaryDeductions: all("SELECT s.*, r.item_name, r.excess_qty, r.item_cost, r.issued_qty FROM salary_deductions s LEFT JOIN review_queue r ON s.review_id = r.id ORDER BY s.created_at DESC, s.id DESC"),
-        waiveRecords: all("SELECT w.*, r.item_name FROM waive_records w LEFT JOIN review_queue r ON w.review_id = r.id ORDER BY w.created_at DESC, w.id DESC"),
-        holdRecords: all("SELECT * FROM review_queue WHERE status IN ('Held', 'Hold') ORDER BY decided_at DESC, id DESC"),
+        salaryDeductions: all(`
+            SELECT s.*, r.item_name, r.item_cost, r.issued_qty,
+                   (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Deduct') as excess_qty
+            FROM salary_deductions s
+            LEFT JOIN review_queue r ON s.review_id = r.id
+            ORDER BY s.created_at DESC, s.id DESC
+        `),
+        waiveRecords: all(`
+            SELECT w.*, r.item_name,
+                   (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Waive') as quantity
+            FROM waive_records w
+            LEFT JOIN review_queue r ON w.review_id = r.id
+            ORDER BY w.created_at DESC, w.id DESC
+        `),
+        holdRecords: all(`
+            SELECT r.*,
+                   (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Hold') as excess_qty
+            FROM review_queue r
+            WHERE (SELECT COUNT(*) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Hold') > 0
+            ORDER BY r.decided_at DESC, r.id DESC
+        `),
         reviewDecisions: all("SELECT * FROM review_decisions ORDER BY created_at DESC, id DESC LIMIT 200"),
         recoveryRecords: all("SELECT * FROM recovery_records ORDER BY created_at DESC, id DESC"),
         uniformIssueMatrix: {

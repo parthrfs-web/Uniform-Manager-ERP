@@ -6,6 +6,7 @@ function render() {
   const todayStr = now.toISOString().split('T')[0];
   const monthStr = todayStr.substring(0, 7);
 
+  // Aggregating Stats
   const employees = state.employees || [];
   const activeEmployees = employees.filter(e => e.status === 'Active').length;
   const uniqueUnits = new Set(employees.map(e => String(e.unit || "").trim()).filter(Boolean)).size;
@@ -21,9 +22,10 @@ function render() {
   const recoveredTotal = salaryDeductions.reduce((sum, row) => sum + Number(row.amount || 0), 0);
   const deductedCases = salaryDeductions.length;
 
-  const heldCount = (state.reviews || []).filter(r => r.status === 'Held' || r.status === 'Hold').length;
+  const heldCount = (state.holdRecords || []).length;
   const waivedCount = (state.waiveRecords || []).length;
 
+  // DOM Card Updates
   document.getElementById("dashActiveEmployees").textContent = activeEmployees;
   document.getElementById("dashTotalEmployees").textContent = employees.length;
   document.getElementById("dashDistRows").textContent = state.uniformIssueMatrix?.totalRows ?? matrixRows.length;
@@ -44,8 +46,11 @@ function render() {
   document.getElementById("dashInventoryItems").textContent = (state.items || []).length;
   document.getElementById("dashPolicies").textContent = (state.policies || []).length;
 
+  // Delegated Panel Updates
   renderLatestImport();
   renderTopLists();
+
+  // Rendering Other Sub-modules
   renderEmployees();
   renderIssues();
   renderDeductions();
@@ -79,6 +84,7 @@ function renderLatestImport() {
 }
 
 function renderTopLists() {
+  // 1. Top 10 Units with highest excess
   const unitExcessMap = new Map();
   (state.uniformIssueMatrix?.rows || []).forEach(row => {
      const u = String(row.unit || "Unknown").trim();
@@ -90,6 +96,7 @@ function renderTopLists() {
       .slice(0, 10);
   renderHtml("topUnitsExcess", topUnits.map(([unit, qty]) => `<tr><td>${escapeHtml(unit)}</td><td>${qty}</td></tr>`).join(""), `<tr><td colspan="2" class="empty">No excess uniform data.</td></tr>`);
 
+  // 2. Top 10 Most Issued Items
   const itemIssueMap = new Map();
   (state.uniformIssues || []).forEach(row => {
      if(Number(row.quantity) > 0) {
@@ -102,6 +109,7 @@ function renderTopLists() {
       .slice(0, 10);
   renderHtml("topIssuedItems", topItems.map(([item, qty]) => `<tr><td>${escapeHtml(item)}</td><td>${qty}</td></tr>`).join(""), `<tr><td colspan="2" class="empty">No items issued yet.</td></tr>`);
 
+  // 3. Top 10 Employees with highest recoveries
   const empRecoveryMap = new Map();
   (state.salaryDeductions || []).forEach(row => {
      if(Number(row.amount) > 0) {
@@ -114,11 +122,12 @@ function renderTopLists() {
       .slice(0, 10);
   renderHtml("topEmployeesRecovery", topRecoveries.map(([emp, amt]) => `<tr><td>${escapeHtml(emp)}</td><td>${formatCompactMoney(amt)}</td></tr>`).join(""), `<tr><td colspan="2" class="empty">No recoveries yet.</td></tr>`);
 
+  // 4. Most Common Excess Items (From Pending Reviews)
   const excessItemMap = new Map();
   (state.reviews || []).forEach(row => {
-     if(row.status === 'Pending' && Number(row.excess_qty) > 0) {
+     if(row.status === 'Pending' && Number(row.pending_qty) > 0) {
         const item = String(row.item_name || "Unknown").trim();
-        excessItemMap.set(item, (excessItemMap.get(item) || 0) + Number(row.excess_qty));
+        excessItemMap.set(item, (excessItemMap.get(item) || 0) + Number(row.pending_qty));
      }
   });
   const topExcessItems = [...excessItemMap.entries()]
@@ -126,6 +135,8 @@ function renderTopLists() {
       .slice(0, 10);
   renderHtml("topCommonExcess", topExcessItems.map(([item, qty]) => `<tr><td>${escapeHtml(item)}</td><td class="text-amber">${qty}</td></tr>`).join(""), `<tr><td colspan="2" class="empty">No pending excess items.</td></tr>`);
 }
+
+// ====== MODULE 10: BACKUP & RESTORE ======
 
 document.getElementById("backupDbBtn")?.addEventListener("click", async () => {
   if (!desktopApi) return showImportError("Works only in Desktop App.");
@@ -157,6 +168,7 @@ document.getElementById("restoreDbBtn")?.addEventListener("click", async () => {
     document.getElementById("progressStatus").textContent = "Validating and restoring backup data...";
     const result = await window.uniformManager.restoreDatabase();
     
+    // Note: If restoration is successful, app automatically kills process and relaunches.
     if (result && result.canceled) {
       stopProgress();
       toast("Restore operation cancelled.");
@@ -166,6 +178,8 @@ document.getElementById("restoreDbBtn")?.addEventListener("click", async () => {
     showImportError("Restore failed: " + error.message);
   }
 });
+
+// =========================================
 
 document.getElementById("resetAcknowledge")?.addEventListener("change", (event) => {
   document.getElementById("resetDataBtn").disabled = !event.target.checked;

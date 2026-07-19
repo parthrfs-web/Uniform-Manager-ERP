@@ -47,10 +47,11 @@ function renderDeductions() {
       <td>${text(row.employee_name)}</td>
       <td>${text(row.unit)}</td>
       <td>${text(row.item_name)}</td>
+      <td>${text(row.quantity)}</td>
       <td class="reason">${text(row.reason)}</td>
       <td class="reason">${text(row.remarks)}</td>
     </tr>
-  `, "No waive records found.", 7);
+  `, "No waive records found.", 8);
 }
 
 document.addEventListener("click", async (event) => {
@@ -90,7 +91,7 @@ async function triggerExcelExport(reportType) {
             const pending = (state.reviews || []).filter(r => r.status === 'Pending');
             config.headers = ["Employee Code", "Employee Name", "Unit", "Item", "Issued Qty", "Allowed Qty", "Pending Qty"];
             config.data = pending.map(r => [
-                r.employee_code, r.employee_name, r.unit, r.item_name, r.issued_qty, r.allowed_qty || 0, r.excess_qty
+                r.employee_code, r.employee_name, r.unit, r.item_name, r.issued_qty, r.allowed_qty || 0, r.pending_qty
             ]);
             config.sheetName = "Pending Reviews";
             config.filename = `Pending_Review_Register_${dateStr}.xlsx`;

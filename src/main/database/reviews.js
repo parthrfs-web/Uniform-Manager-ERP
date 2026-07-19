@@ -14,92 +14,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       };
     },
     bulkCreateReviews(reviewRows) {
-      if (!reviewRows.length) return;
-      const createdAt = now();
-      
-      // Removed period scope conflict checks. We merge matching employee + items automatically.
-      const checkStmt = db.prepare(`
-        SELECT id 
-        FROM review_queue 
-        WHERE status = 'Pending' 
-          AND employee_code = ? 
-          AND lower(item_name) = lower(?)
-          AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-      `);
-      
-      const updateStmt = db.prepare(`
-        UPDATE review_queue 
-        SET issued_qty = ?, 
-            allowed_qty = ?,
-            excess_qty = excess_qty + ?, 
-            item_cost = ?,
-            estimated_amount = estimated_amount + ? 
-        WHERE id = ?
-      `);
-
-      const insertStmt = db.prepare(
-        `INSERT INTO review_queue (
-          employee_code, employee_name, unit, item_name, issue_month, issue_year, issue_period_label, issued_qty, allowed_qty, excess_qty,
-          item_cost, estimated_amount, reason, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)`
-      );
-
-      db.run("BEGIN TRANSACTION");
-      try {
-        reviewRows.forEach((row) => {
-          checkStmt.bind([
-            row.employee_code,
-            row.item_name || "",
-            row.unit || ""
-          ]);
-          
-          let existingId = null;
-          if (checkStmt.step()) {
-            existingId = checkStmt.getAsObject().id;
-          }
-          checkStmt.reset();
-
-          if (existingId) {
-             updateStmt.run([
-               Number(row.issued_qty || 0), 
-               row.allowed_qty === null || row.allowed_qty === undefined ? null : Number(row.allowed_qty || 0),
-               Number(row.excess_qty || 0), 
-               Number(row.item_cost || 0),
-               Number(row.estimated_amount || 0), 
-               existingId
-             ]);
-          } else {
-             insertStmt.run([
-                row.employee_code,
-                row.employee_name,
-                row.unit || "",
-                row.item_name || "",
-                row.issue_month ? Number(row.issue_month) : null,
-                row.issue_year ? Number(row.issue_year) : null,
-                row.issue_period_label || "",
-                Number(row.issued_qty || 0),
-                row.allowed_qty === null || row.allowed_qty === undefined ? null : Number(row.allowed_qty || 0),
-                Number(row.excess_qty || 0),
-                Number(row.item_cost || 0),
-                Number(row.estimated_amount || 0),
-                row.reason,
-                createdAt,
-             ]);
-          }
-        });
-        db.run("COMMIT");
-      } catch (error) {
-        db.run("ROLLBACK");
-        throw error;
-      } finally {
-        checkStmt.free();
-        updateStmt.free();
-        insertStmt.free();
-      }
-      audit("Reviews Bulk Created", `${reviewRows.length} review rows processed (inserted/updated) from import.`, {
-        entityType: "Review",
-        result: "Success",
-      });
+        // Obsolete function, entitlement logic runs sequentially now
     },
     getReviewQueueStage1() {
       return all(`
@@ -154,11 +69,14 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
             params: [identity.code, identity.name],
           }
         : { sql: "rq.employee_code = ?", params: [identity.code] };
-      return all(`
+        
+      const rows = all(`
         SELECT 
           rq.*,
           COALESCE(ui.cost, 0) AS live_rate,
-          (rq.excess_qty * COALESCE(ui.cost, 0)) AS live_amount
+          (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = rq.id AND decision = 'Deduct') as sum_deduct,
+          (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = rq.id AND decision = 'Waive') as sum_waive,
+          (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = rq.id AND decision = 'Hold') as sum_hold
         FROM review_queue rq
         LEFT JOIN (
             SELECT lower(item_name) AS search_name, MAX(cost) AS cost
@@ -168,65 +86,37 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         WHERE ${identityFilter.sql}
         ORDER BY CASE WHEN rq.status = 'Pending' THEN 0 ELSE 1 END, rq.created_at DESC
       `, identityFilter.params);
+
+      rows.forEach(row => {
+          row.history_items = all(`
+              SELECT id, issued_at as issue_date, quantity, unit, issue_month, issue_year, issue_period_label, remarks
+              FROM uniform_issues
+              WHERE employee_code = ? AND lower(item_name) = lower(?)
+              ORDER BY COALESCE(issue_year, 9999) ASC, COALESCE(issue_month, 99) ASC, issued_at ASC, id ASC
+          `, [row.employee_code, row.item_name]);
+          
+          row.child_items = all(`
+              SELECT 
+                rqi.id, rqi.decision, rqi.quantity, rqi.remarks, rqi.issue_date,
+                ui.issue_month, ui.issue_year, ui.issue_period_label, ui.remarks as issue_remarks
+              FROM review_queue_items rqi
+              LEFT JOIN uniform_issues ui ON rqi.uniform_issue_id = ui.id
+              WHERE rqi.review_queue_id = ?
+              ORDER BY ui.issued_at ASC, ui.id ASC
+          `, [row.id]);
+      });
+
+      return rows;
     },
     getReviewQueueStage3(req) {
-      const identity = this.parseReviewIdentity(req.code);
-      const identityFilter = identity.name !== undefined
-        ? {
-            issueSql: "i.employee_code = ? AND lower(COALESCE(i.employee_name, '')) = lower(COALESCE(?, ''))",
-            reviewSql: "i.employee_code = r.employee_code AND lower(COALESCE(i.employee_name, '')) = lower(COALESCE(r.employee_name, ''))",
-            params: [identity.code, identity.name],
-          }
-        : {
-            issueSql: "i.employee_code = ?",
-            reviewSql: "i.employee_code = r.employee_code",
-            params: [identity.code],
-          };
-      return all(`
-        SELECT 
-          COALESCE(
-            NULLIF(TRIM(i.issue_period_label), ''), 
-            CASE WHEN i.issue_year > 0 THEN i.issue_year || '-' || substr('00' || COALESCE(i.issue_month, 1), -2, 2) || '-01' ELSE NULL END, 
-            date(MAX(i.issued_at))
-          ) AS issue_date,
-          COALESCE(i.issue_month, 0) AS month,
-          COALESCE(i.issue_year, 0) AS year,
-          MAX(i.unit) AS unit,
-          SUM(i.quantity) AS issued_qty,
-          COALESCE(MAX(p.yearly_entitlement), 0) AS allowed_qty,
-          COALESCE(MAX(r.status), 'No Action') AS previous_decision
-        FROM uniform_issues i
-        LEFT JOIN unit_policies p 
-          ON lower(TRIM(COALESCE(i.unit, ''))) = lower(TRIM(COALESCE(p.unit, ''))) 
-          AND lower(TRIM(i.item_name)) = lower(TRIM(p.item_name))
-        LEFT JOIN review_queue r 
-          ON ${identityFilter.reviewSql} 
-          AND lower(TRIM(i.item_name)) = lower(TRIM(r.item_name)) 
-        WHERE ${identityFilter.issueSql} 
-          AND lower(TRIM(i.item_name)) = lower(TRIM(?))
-          AND i.quantity > 0
-          AND (
-            i.issue_year >= (CAST(strftime('%Y', 'now') AS INTEGER) - 2)
-            OR date(i.issued_at) >= date('now', '-2 years')
-            OR (i.issue_year IS NULL OR i.issue_year = 0)
-          )
-        GROUP BY 
-          i.employee_code, 
-          lower(TRIM(COALESCE(i.employee_name, ''))),
-          lower(TRIM(i.item_name)), 
-          COALESCE(i.issue_year, 0), 
-          COALESCE(i.issue_month, 0), 
-          lower(TRIM(COALESCE(i.issue_period_label, '')))
-        ORDER BY 
-          COALESCE(i.issue_year, 0) DESC, 
-          COALESCE(i.issue_month, 0) DESC,
-          MAX(i.issued_at) DESC
-      `, [...identityFilter.params, req.item]);
+       // Function fully deprecated, logic incorporated in Stage 2. Included for structure integrity.
+       return [];
     },
     deleteReview(reviewId) {
       const review = all("SELECT * FROM review_queue WHERE id = ?", [Number(reviewId)])[0];
       if (!review) throw new Error(`Review #${reviewId} was not found.`);
       db.run("DELETE FROM review_queue WHERE id = ?", [Number(reviewId)]);
+      db.run("DELETE FROM review_queue_items WHERE review_queue_id = ?", [Number(reviewId)]);
       db.run("DELETE FROM review_decisions WHERE review_id = ?", [Number(reviewId)]);
       db.run("DELETE FROM salary_deductions WHERE review_id = ?", [Number(reviewId)]);
       db.run("DELETE FROM waive_records WHERE review_id = ?", [Number(reviewId)]);
@@ -243,6 +133,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       
       if (action.status === 'Pending') {
         db.run("UPDATE review_queue SET status = 'Pending', remarks = NULL, decided_at = NULL WHERE id = ?", [Number(action.id)]);
+        db.run("UPDATE review_queue_items SET decision = 'Pending', remarks = NULL, reviewed_by = NULL, reviewed_at = NULL WHERE review_queue_id = ?", [Number(action.id)]);
         db.run("DELETE FROM review_decisions WHERE review_id = ?", [Number(action.id)]);
         db.run("DELETE FROM salary_deductions WHERE review_id = ?", [Number(action.id)]);
         db.run("DELETE FROM waive_records WHERE review_id = ?", [Number(action.id)]);
@@ -250,81 +141,79 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           entityType: "Review",
           entityId: action.id,
           oldValue: review,
-          newValue: { ...review, status: "Pending", remarks: null, decided_at: null },
+          newValue: { ...review, status: "Pending" },
         });
         save();
         return;
       }
-
-      const validStatuses = new Set(["Waived", "Held", "Hold", "Deducted", "Deduct"]);
-      if (!validStatuses.has(action.status)) throw new Error("Invalid review decision.");
-      const isWaived = action.status === "Waived";
-      const isDeducted = action.status === "Deducted" || action.status === "Deduct";
       
       const approvedBy = String(action.approved_by || "").trim();
-      const reason = String(action.reason || "").trim();
-      const remarks = String(action.remarks || "").trim();
-      
       if (!approvedBy) throw new Error("Approved by is required for review decisions.");
-      if ((isWaived || isDeducted) && !reason) {
-        throw new Error("Reason is required for Waive and Deduct decisions.");
-      }
-      
-      db.run(
-        "UPDATE review_queue SET status = ?, remarks = ?, decided_at = ? WHERE id = ?",
-        [action.status, remarks || reason, now(), Number(action.id)]
-      );
-      
-      db.run(
-        `INSERT INTO review_decisions (review_id, employee_code, employee_name, unit, decision, reason, approved_by, remarks, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [Number(action.id), review.employee_code, review.employee_name, review.unit || "", action.status, reason, approvedBy, remarks, now()]
-      );
-      
-      if (isDeducted) {
-        const existing = scalar("SELECT COUNT(*) FROM salary_deductions WHERE review_id = ?", [Number(action.id)]);
-        if (!existing) {
-          const liveCost = scalar("SELECT MAX(cost) FROM uniform_items WHERE lower(item_name) = lower(?)", [review.item_name]) || 0;
-          const liveAmount = review.excess_qty * liveCost;
-          const amount = liveAmount > 0 ? liveAmount : Number(review.estimated_amount || extractAmount(review.reason) || 0);
-          
-          db.run(
-            `INSERT INTO salary_deductions (review_id, employee_code, employee_name, unit, issue_month, issue_year, issue_period_label, amount, reason, status, created_at, approved_by, approval_date, remarks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Payroll', ?, ?, ?, ?)`,
-            [Number(action.id), review.employee_code, review.employee_name, review.unit || "", review.issue_month || null, review.issue_year || null, review.issue_period_label || "", amount, reason || review.reason, now(), approvedBy, now(), remarks]
+      if (!action.reason) throw new Error("A general reason is required for review decisions.");
+
+      let totalDeduct = 0;
+      let totalWaive = 0;
+      let totalHold = 0;
+      let totalPending = 0;
+
+      db.run("BEGIN TRANSACTION");
+      try {
+          if (Array.isArray(action.issue_decisions)) {
+              for (const child of action.issue_decisions) {
+                  db.run("UPDATE review_queue_items SET decision = ?, remarks = ?, reviewed_by = ?, reviewed_at = ? WHERE id = ?",
+                      [child.decision, child.remarks, approvedBy, now(), Number(child.id)]
+                  );
+
+                  if (child.decision === 'Deduct') totalDeduct += Number(child.quantity);
+                  else if (child.decision === 'Waive') totalWaive += Number(child.quantity);
+                  else if (child.decision === 'Hold') totalHold += Number(child.quantity);
+                  else totalPending += Number(child.quantity);
+              }
+          }
+
+          let newStatus = 'Completed';
+          if (totalPending > 0) newStatus = 'Pending';
+          else if (totalHold > 0) newStatus = 'Held';
+          else if (totalDeduct > 0 && totalWaive === 0) newStatus = 'Deducted';
+          else if (totalWaive > 0 && totalDeduct === 0) newStatus = 'Waived';
+
+          db.run("UPDATE review_queue SET status = ?, remarks = ?, decided_at = ? WHERE id = ?", [newStatus, action.reason, now(), Number(action.id)]);
+
+          db.run("DELETE FROM salary_deductions WHERE review_id = ?", [Number(action.id)]);
+          if (totalDeduct > 0) {
+              const liveCost = scalar("SELECT MAX(cost) FROM uniform_items WHERE lower(item_name) = lower(?)", [review.item_name]) || 0;
+              const amount = totalDeduct * liveCost;
+              db.run(`INSERT INTO salary_deductions (review_id, employee_code, employee_name, unit, issue_month, issue_year, issue_period_label, amount, reason, status, created_at, approved_by, approval_date, remarks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Payroll', ?, ?, ?, ?)`,
+                  [review.id, review.employee_code, review.employee_name, review.unit || "", review.issue_month || null, review.issue_year || null, review.issue_period_label || "", amount, action.reason, now(), approvedBy, now(), '']
+              );
+              const deduction = all("SELECT * FROM salary_deductions WHERE review_id = ? ORDER BY id DESC LIMIT 1", [review.id])[0];
+              review.excess_qty = totalDeduct;
+              review.status = newStatus;
+              const pdfPath = generateDeductionPdf(review, deduction, approvedBy, action.reason, '');
+              db.run("UPDATE salary_deductions SET pdf_path = ?, exported_at = ? WHERE id = ?", [pdfPath, now(), deduction.id]);
+          }
+
+          db.run("DELETE FROM waive_records WHERE review_id = ?", [Number(action.id)]);
+          if (totalWaive > 0) {
+              db.run(`INSERT INTO waive_records (review_id, employee_code, employee_name, unit, reason, remarks, approved_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                  [review.id, review.employee_code, review.employee_name, review.unit || "", review.reason, action.reason, approvedBy, now()]
+              );
+          }
+
+          db.run(`INSERT INTO review_decisions (review_id, employee_code, employee_name, unit, decision, reason, approved_by, remarks, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [review.id, review.employee_code, review.employee_name, review.unit || "", newStatus, action.reason, approvedBy, '', now()]
           );
-          const deduction = all("SELECT * FROM salary_deductions WHERE review_id = ? ORDER BY id DESC LIMIT 1", [Number(action.id)])[0];
-          const pdfPath = generateDeductionPdf(review, deduction, approvedBy, reason || review.reason, remarks);
-          db.run("UPDATE salary_deductions SET pdf_path = ?, exported_at = ? WHERE id = ?", [pdfPath, now(), deduction.id]);
-          audit("Salary Deduction Created", `Review #${action.id}: ${review.employee_code}`, {
-            entityType: "Review",
-            entityId: action.id,
-            oldValue: review,
-            newValue: { deduction, pdf_path: pdfPath },
-            remarks: reason || review.reason,
-          });
-        }
+
+          db.run("COMMIT");
+      } catch (err) {
+          db.run("ROLLBACK");
+          throw err;
       }
-      
-      if (isWaived) {
-        const existing = scalar("SELECT COUNT(*) FROM waive_records WHERE review_id = ?", [Number(action.id)]);
-        if (!existing) {
-          db.run(
-            `INSERT INTO waive_records (review_id, employee_code, employee_name, unit, reason, remarks, approved_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [Number(action.id), review.employee_code, review.employee_name, review.unit || "", review.reason, remarks || reason, approvedBy, now()]
-          );
-          audit("Waive Record Created", `Review #${action.id}: ${review.employee_code}`, {
-            entityType: "Review",
-            entityId: action.id,
-            oldValue: review,
-            newValue: { status: action.status, reason, approved_by: approvedBy, remarks },
-          });
-        }
-      }
-      audit("Review Decision", `#${action.id} marked ${action.status} by ${approvedBy}`, {
+
+      audit("Review Decision", `#${action.id} processed by ${approvedBy}`, {
         entityType: "Review",
         entityId: action.id,
-        oldValue: review,
-        newValue: { ...review, status: action.status, remarks: remarks || reason, decided_at: now() },
-        remarks: reason || remarks || review.reason,
+        remarks: action.reason
       });
       save();
     }

@@ -1,4 +1,4 @@
-module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, ensureDefaultPoliciesForIssueRows, extractAmount, generateDeductionPdf, bulkCreateReviews }) => ({
+module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, ensureDefaultPoliciesForIssueRows, extractAmount, generateDeductionPdf }) => ({
     recordImport(importRecord) {
       db.run(
         `INSERT INTO imports (
@@ -99,199 +99,157 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
     },
     
     evaluateEntitlementsForImport(importId, progressCallback) {
-      const importedIssues = importId 
-        ? all("SELECT * FROM uniform_issues WHERE import_id = ? AND quantity > 0", [Number(importId)])
-        : all("SELECT * FROM uniform_issues WHERE quantity > 0");
-        
-      if (!importedIssues.length) return 0;
-
-      let rajjanDistRows = 0;
-      let rajjanIssues = 0;
-      let rajjanReviews = 0;
-      importedIssues.forEach(issue => {
-          if (String(issue.employee_name || "").toLowerCase().includes("rajjan") || String(issue.employee_code) === "Rajjan Kumar") {
-              rajjanDistRows++;
-              rajjanIssues += Number(issue.quantity || 0);
-          }
-      });
-
-      const policies = all("SELECT * FROM unit_policies");
-      const policyByUnitItem = new Map(
-        policies.map((policy) => [
-          `${String(policy.unit).toLowerCase()}|${String(policy.item_name).toLowerCase()}`,
-          policy,
-        ])
-      );
-
-      const reviewRows = [];
-      const checked = new Set();
-      const processedIssueIds = new Set();
-      const generatedIssueIds = new Set();
-      
-      const total = importedIssues.length;
-
-      const issueKey = (issue) => issue.id || `${issue.import_id}:${issue.source_sheet}:${issue.source_row}:${issue.employee_code}:${issue.item_name}`;
-      
-      const logReviewGeneration = (issue, created, note = "") => {
-        console.log(
-          `[ReviewGeneration] Issue ID=${issue.id || "-"} | Employee Code=${issue.employee_code || "-"} | ` +
-          `Employee Name=${issue.employee_name || "-"} | Item=${issue.item_name || "-"} | ` +
-          `Distribution Row ID=${issue.source_row || "-"} | Review Created=${created ? "YES" : "NO"}${note ? ` | ${note}` : ""}`
-        );
-      };
-      
-      const queueReview = (issue, reviewRow) => {
-        const key = issueKey(issue);
-        if (generatedIssueIds.has(key)) {
-          logReviewGeneration(issue, false, "Duplicate source issue skipped inside evaluateEntitlementsForImport");
-          return false;
-        }
-        generatedIssueIds.add(key);
-        reviewRows.push(reviewRow);
-        logReviewGeneration(issue, true);
-        return true;
-      };
-
-      const processBatch = (start, end) => {
-        for (let i = start; i < end; i++) {
-          const issue = importedIssues[i];
-          const sourceIssueKey = issueKey(issue);
-          if (processedIssueIds.has(sourceIssueKey)) continue;
-          processedIssueIds.add(sourceIssueKey);
-
-          // ENHANCEMENT: Grouping exclusively by Employee, Unit, and Item. Removing the Period split.
-          const key = `${issue.employee_code}|${issue.unit}|${issue.item_name}`.toLowerCase();
-          
-          if (checked.has(key)) continue;
-          checked.add(key);
-
-          const policy = policyByUnitItem.get(`${String(issue.unit).toLowerCase()}|${String(issue.item_name).toLowerCase()}`);
-          const isRajjan = String(issue.employee_name || "").toLowerCase().includes("rajjan") || String(issue.employee_code) === "Rajjan Kumar";
-
-          if (!policy) {
-            const params = [issue.employee_code, issue.item_name, issue.unit || ""];
-            if (importId) params.push(Number(importId));
-
-            const importedQuantity = scalar(
-              `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
-               WHERE employee_code = ? AND lower(item_name) = lower(?)
-                 AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-                 ${importId ? "AND import_id = ?" : ""}`,
-              params
-            );
-
-            const created = queueReview(issue, {
-              employee_code: issue.employee_code,
-              employee_name: issue.employee_name,
-              unit: issue.unit || "",
-              item_name: issue.item_name,
-              issue_month: null,
-              issue_year: null,
-              issue_period_label: "Summary",
-              issued_qty: importedQuantity,
-              allowed_qty: null,
-              excess_qty: importedQuantity,
-              item_cost: 0,
-              estimated_amount: 0,
-              reason: `No entitlement policy found for ${issue.unit || "Unknown Unit"} / ${issue.item_name}.`,
-            });
+        const targetEmployees = importId 
+            ? all("SELECT DISTINCT employee_code FROM uniform_issues WHERE import_id = ?", [Number(importId)]).map(r => r.employee_code)
+            : all("SELECT DISTINCT employee_code FROM uniform_issues").map(r => r.employee_code);
             
-            if (isRajjan && created) rajjanReviews++;
-            
-          } else {
-            const issuedQuantity = scalar(
-              `SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
-               WHERE employee_code = ? AND lower(item_name) = lower(?)
-               AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))`,
-              [issue.employee_code, issue.item_name, issue.unit || ""]
-            );
-            const allowed = Number(policy.yearly_entitlement || 0);
-            
-            const settledQuantity = scalar(
-              `SELECT COALESCE(SUM(excess_qty), 0) FROM review_queue
-               WHERE employee_code = ? AND lower(item_name) = lower(?)
-                 AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-                 AND status IN ('Waived', 'Deducted', 'Deduct')`,
-              [issue.employee_code, issue.item_name, issue.unit || ""]
-            );
-            const unresolvedQuantity = scalar(
-              `SELECT COALESCE(SUM(excess_qty), 0) FROM review_queue
-               WHERE employee_code = ? AND lower(item_name) = lower(?)
-                 AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))
-                 AND status IN ('Pending', 'Held', 'Hold')`,
-              [issue.employee_code, issue.item_name, issue.unit || ""]
-            );
+        if (!targetEmployees.length) return 0;
 
-            if (issuedQuantity > allowed + settledQuantity + unresolvedQuantity) {
-              const excess = issuedQuantity - allowed - settledQuantity - unresolvedQuantity;
-              const amount = excess * Number(policy.item_cost || 0);
-              const created = queueReview(issue, {
-                employee_code: issue.employee_code,
-                employee_name: issue.employee_name,
-                unit: issue.unit || "",
-                item_name: issue.item_name,
-                issue_month: null,
-                issue_year: null,
-                issue_period_label: "Summary",
-                issued_qty: issuedQuantity,
-                allowed_qty: allowed,
-                excess_qty: excess,
-                item_cost: Number(policy.item_cost || 0),
-                estimated_amount: amount,
-                reason: `${issue.item_name} entitlement exceeded.`,
-              });
-              if (isRajjan && created) rajjanReviews++;
+        const policies = all("SELECT * FROM unit_policies");
+        const policyMap = new Map(policies.map(p => [`${String(p.unit).toLowerCase()}|${String(p.item_name).toLowerCase()}`, Number(p.yearly_entitlement || 0)]));
+        const costMap = new Map(policies.map(p => [`${String(p.unit).toLowerCase()}|${String(p.item_name).toLowerCase()}`, Number(p.item_cost || 0)]));
+
+        let generatedCount = 0;
+        const total = targetEmployees.length;
+
+        const processBatch = (start, end) => {
+            db.run("BEGIN TRANSACTION");
+            try {
+                for (let i = start; i < end; i++) {
+                    const empCode = targetEmployees[i];
+                    
+                    const issues = all(`SELECT * FROM uniform_issues WHERE employee_code = ? AND quantity > 0 ORDER BY COALESCE(issue_year, 9999) ASC, COALESCE(issue_month, 99) ASC, issued_at ASC, source_row ASC, id ASC`, [empCode]);
+                    
+                    const itemsMap = new Map();
+                    issues.forEach(issue => {
+                        const key = String(issue.item_name).toLowerCase();
+                        if (!itemsMap.has(key)) itemsMap.set(key, { item_name: issue.item_name, issues: [] });
+                        itemsMap.get(key).issues.push(issue);
+                    });
+
+                    for (const [itemKey, data] of itemsMap.entries()) {
+                        const itemName = data.item_name;
+                        const itemIssues = data.issues;
+                        
+                        let totalIssued = 0;
+                        let totalExcess = 0;
+                        
+                        const unitBalances = new Map();
+                        const excessTransactions = [];
+                        let latestUnit = "";
+                        let maxCost = 0;
+
+                        for (const issue of itemIssues) {
+                            latestUnit = issue.unit || latestUnit;
+                            const pKey = `${String(issue.unit || '').toLowerCase()}|${itemKey}`;
+                            const cost = costMap.get(pKey) || 0;
+                            if (cost > maxCost) maxCost = cost;
+                            
+                            if (!unitBalances.has(pKey)) {
+                                unitBalances.set(pKey, policyMap.has(pKey) ? policyMap.get(pKey) : 0);
+                            }
+                            
+                            totalIssued += issue.quantity;
+                            
+                            let balance = unitBalances.get(pKey);
+                            let consumed = Math.min(issue.quantity, balance);
+                            unitBalances.set(pKey, balance - consumed);
+                            
+                            let excess = issue.quantity - consumed;
+                            if (excess > 0) {
+                                totalExcess += excess;
+                                excessTransactions.push({ issue, excess_qty: excess });
+                            }
+                        }
+                        
+                        const totalAllowed = totalIssued - totalExcess;
+                        
+                        let rq = all("SELECT * FROM review_queue WHERE employee_code = ? AND lower(item_name) = ?", [empCode, itemKey])[0];
+                        let rqId;
+                        
+                        const pKey = `${String(latestUnit).toLowerCase()}|${itemKey}`;
+                        const reason = policyMap.has(pKey) 
+                            ? `${itemName} entitlement exceeded.` 
+                            : `No entitlement policy found for ${latestUnit || "Unknown Unit"} / ${itemName}.`;
+                        const estimatedAmount = totalExcess * maxCost;
+                        
+                        if (!rq) {
+                            if (totalExcess > 0) {
+                                db.run(`INSERT INTO review_queue (employee_code, employee_name, unit, item_name, issued_qty, allowed_qty, excess_qty, item_cost, estimated_amount, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)`,
+                                [empCode, itemIssues[0].employee_name, latestUnit, itemName, totalIssued, totalAllowed, totalExcess, maxCost, estimatedAmount, reason, now()]);
+                                rqId = scalar("SELECT last_insert_rowid()");
+                                generatedCount++;
+                            } else {
+                                continue; 
+                            }
+                        } else {
+                            rqId = rq.id;
+                        }
+                        
+                        const legacyItems = all("SELECT * FROM review_queue_items WHERE review_queue_id = ? AND decision != 'Pending'", [rqId]);
+                        const legacyMap = new Map(legacyItems.map(li => [li.uniform_issue_id, li]));
+                        
+                        db.run("DELETE FROM review_queue_items WHERE review_queue_id = ?", [rqId]);
+                        
+                        let hasPending = false;
+                        
+                        for (const ext of excessTransactions) {
+                            const legacy = legacyMap.get(ext.issue.id);
+                            const decision = legacy ? legacy.decision : 'Pending';
+                            const remarks = legacy ? legacy.remarks : '';
+                            const reviewedBy = legacy ? legacy.reviewed_by : null;
+                            const reviewedAt = legacy ? legacy.reviewed_at : null;
+                            
+                            if (decision === 'Pending') hasPending = true;
+                            
+                            db.run(`INSERT INTO review_queue_items (review_queue_id, uniform_issue_id, employee_code, item_name, issue_date, quantity, decision, remarks, reviewed_by, reviewed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                            [rqId, ext.issue.id, empCode, itemName, ext.issue.issued_at, ext.excess_qty, decision, remarks, reviewedBy, reviewedAt, now()]);
+                        }
+                        
+                        let newStatus = hasPending ? 'Pending' : 'Completed';
+                        if (totalExcess === 0) newStatus = 'Completed'; 
+                        
+                        db.run("UPDATE review_queue SET issued_qty = ?, allowed_qty = ?, excess_qty = ?, item_cost = ?, estimated_amount = ?, reason = ?, status = ? WHERE id = ?", [totalIssued, totalAllowed, totalExcess, maxCost, estimatedAmount, reason, newStatus, rqId]);
+                    }
+                }
+                db.run("COMMIT");
+            } catch (e) {
+                db.run("ROLLBACK");
+                throw e;
             }
-          }
+        };
+
+        const finalize = () => {
+            if (generatedCount > 0) {
+                audit("Entitlement Review Generated", `${generatedCount} transaction groups marked pending review.`, {
+                    entityType: "Review",
+                    entityId: importId || null,
+                    newValue: { generated: generatedCount },
+                });
+                save();
+            }
+            return generatedCount;
+        };
+
+        if (!progressCallback) {
+            processBatch(0, total);
+            return finalize();
         }
-      };
 
-      const finalize = () => {
-        if (rajjanDistRows > 0) {
-            console.log(`\nEmployee: Rajjan Kumar`);
-            console.log(`Distribution rows found: ${rajjanDistRows}`);
-            console.log(`Uniform issues found: ${rajjanIssues}`);
-            console.log(`Review rows generated: ${rajjanReviews}\n`);
-        }
-
-        bulkCreateReviews(reviewRows);
-        if (reviewRows.length) {
-          audit("Entitlement Review Generated", `${reviewRows.length} imported issue rows need review.`, {
-            entityType: "Review",
-            entityId: importId || null,
-            newValue: { generated: reviewRows.length },
-          });
-          save();
-        }
-        return reviewRows.length;
-      };
-
-      if (!progressCallback) {
-          processBatch(0, total);
-          return finalize();
-      }
-
-      return (async () => {
-          const BATCH_SIZE = 25;
-          for (let i = 0; i < total; i += BATCH_SIZE) {
-              processBatch(i, Math.min(i + BATCH_SIZE, total));
-              if (progressCallback) progressCallback(Math.min(i + BATCH_SIZE, total), total);
-              await new Promise(resolve => setTimeout(resolve, 0));
-          }
-          return finalize();
-      })();
+        return (async () => {
+            const BATCH_SIZE = 25;
+            for (let i = 0; i < total; i += BATCH_SIZE) {
+                processBatch(i, Math.min(i + BATCH_SIZE, total));
+                if (progressCallback) progressCallback(Math.min(i + BATCH_SIZE, total), total);
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
+            return finalize();
+        })();
     },
     
     recalculateReviews(onProgress) {
-      db.run("DELETE FROM review_queue WHERE status = 'Pending'");
-      
       if (!onProgress) {
           const generated = this.evaluateEntitlementsForImport(null);
-          audit("Review Queue Recalculated", `${generated} pending review rows generated from current policies.`, {
-            entityType: "Review",
-            newValue: { generated },
-          });
-          save();
           return generated;
       }
 
@@ -299,20 +257,17 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           const generated = await this.evaluateEntitlementsForImport(null, (processed, total) => {
               if (onProgress) onProgress(null, 1, 1, processed, total);
           });
-          audit("Review Queue Recalculated", `${generated} pending review rows generated from current policies.`, {
-            entityType: "Review",
-            newValue: { generated },
-          });
-          save();
           return generated;
       })();
     },
+    
     resetOperationalData() {
       db.run("BEGIN TRANSACTION");
       try {
         db.run("DELETE FROM employees");
         db.run("DELETE FROM imports");
         db.run("DELETE FROM review_queue");
+        db.run("DELETE FROM review_queue_items");
         db.run("DELETE FROM uniform_issues");
         db.run("DELETE FROM salary_deductions");
         db.run("DELETE FROM waive_records");

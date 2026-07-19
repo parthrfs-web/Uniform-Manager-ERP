@@ -139,6 +139,21 @@ const APP_SCHEMA = {
     "created_at TEXT NOT NULL",
     "decided_at TEXT"
   ],
+  review_queue_items: [
+    "id INTEGER PRIMARY KEY AUTOINCREMENT",
+    "review_queue_id INTEGER NOT NULL",
+    "uniform_issue_id INTEGER NOT NULL",
+    "employee_code TEXT NOT NULL",
+    "item_name TEXT NOT NULL",
+    "issue_date TEXT",
+    "quantity REAL NOT NULL DEFAULT 0",
+    "decision TEXT NOT NULL DEFAULT 'Pending'",
+    "remarks TEXT",
+    "reviewed_by TEXT",
+    "reviewed_at TEXT",
+    "created_at TEXT NOT NULL",
+    "FOREIGN KEY(review_queue_id) REFERENCES review_queue(id) ON DELETE CASCADE"
+  ],
   salary_deductions: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
     "review_id INTEGER",
@@ -489,10 +504,11 @@ async function createDatabase(userDataPath) {
       [review.employee_code]
     );
     const currentPeriod = review.issue_period_label || (review.issue_month && review.issue_year ? `${review.issue_month}/${review.issue_year}` : "");
-    const excessQty = Number(review.excess_qty || 0);
     const totalAmount = Number(deduction.amount || 0);
-    const itemAmount = totalAmount; 
-    const itemCost = excessQty > 0 ? itemAmount / excessQty : Number(review.item_cost || 0);
+
+    const excessQty = Number(review.excess_qty || 0);
+    const itemCost = excessQty > 0 ? totalAmount / excessQty : Number(review.item_cost || 0);
+    
     const createdAt = deduction.created_at || new Date().toISOString();
     
     const detailRows = [
@@ -502,7 +518,7 @@ async function createDatabase(userDataPath) {
         fitText(review.allowed_qty === null || review.allowed_qty === undefined ? "NoPolicy" : Number(review.allowed_qty || 0), 8),
         fitText(excessQty, 8),
         fitText(money(itemCost), 12),
-        fitText(money(itemAmount), 12),
+        fitText(money(totalAmount), 12),
       ].join("  "),
     ];
     const historyRows = issueHistory.slice(0, 18).map((issue) => {
@@ -570,14 +586,10 @@ async function createDatabase(userDataPath) {
     save();
   }
 
-  const moduleContext = { db, dbPath, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, ensureDefaultPoliciesForIssueRows, extractAmount, generateDeductionPdf };
+const moduleContext = { db, dbPath, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, ensureDefaultPoliciesForIssueRows, extractAmount, generateDeductionPdf };
 
   const employeeModule = createEmployees(moduleContext);
   const reviewModule = createReviews(moduleContext);
-  
-  // FIXED: Expose bulkCreateReviews to context so imported issues can be correctly routed to review generation queue
-  moduleContext.bulkCreateReviews = reviewModule.bulkCreateReviews;
-  
   const importModule = createImports(moduleContext);
   const policyModule = createPolicies(moduleContext);
   const inventoryModule = createInventory(moduleContext);

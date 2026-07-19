@@ -8,6 +8,7 @@
     <style>
       .clickable { cursor: pointer; transition: background 0.2s; }
       .clickable:hover { background: #1f2b3d; }
+      .text-ink { color: var(--ink); }
     </style>
   </head>
   <body>
@@ -45,6 +46,16 @@
 
       <section class="view active" id="dashboard">
         <div id="importError" class="error-panel"></div>
+
+        <!-- QUICK ACTIONS -->
+        <div class="panel flush" style="margin-bottom: 18px; padding: 12px 18px; display: flex; gap: 10px; background: #131922;">
+          <strong style="margin-right: auto; align-self: center; color: var(--muted);">Quick Actions:</strong>
+          <button class="secondary" onclick="setView('import')">Import Excel</button>
+          <button class="secondary" onclick="setView('review')">Open Review Queue</button>
+          <button class="secondary" onclick="setView('deductions')">Open Reports</button>
+          <button class="secondary" onclick="setView('policies')">Open Policies</button>
+          <button class="secondary" onclick="setView('employees')">Open Employees</button>
+        </div>
 
         <!-- SUMMARY & STAT CARDS -->
         <div class="stats" id="dashboardStats" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px;">
@@ -161,8 +172,8 @@
         </div>
         <div class="panel">
           <div class="panel-title-row">
-            <h3 style="margin-bottom: 15px;">Employee Distribution Register</h3>
-            <div class="row-actions" style="margin-bottom: 15px;">
+            <h3>Employee Distribution Register</h3>
+            <div class="row-actions">
               <button id="loadMoreDistributionBtn" type="button">Load More</button>
               <button id="loadAllDistributionBtn" type="button">Load All</button>
               <button class="secondary" data-export="history">Export Excel</button>
@@ -228,12 +239,9 @@
 
       <section class="view" id="review">
         <div id="reviewStage1">
-          <div class="toolbar" style="display: flex; justify-content: space-between; align-items: center;">
-            <input id="reviewSearchInput" placeholder="Search by Code, Name, Unit" style="width: 320px; max-width: 100%; background: #111821; color: var(--ink);" />
-            <div style="display: flex; gap: 10px;">
-              <button id="recalculateReviewsBtn" class="secondary" type="button">Recalculate Reviews</button>
-              <button class="secondary" data-export="pendingReview">Export Excel</button>
-            </div>
+          <div class="toolbar" style="display: flex; justify-content: space-between;">
+            <button id="recalculateReviewsBtn" class="secondary" type="button">Recalculate Reviews</button>
+            <button class="secondary" data-export="pendingReview">Export Excel</button>
           </div>
           <div class="panel flush">
             <div class="table-wrap">
@@ -248,7 +256,7 @@
         <div id="reviewStage2" style="display: none;">
           <div class="toolbar">
             <button id="backToStage1Btn" class="secondary">← Back to Employees</button>
-            <h3 style="margin-left: 10px;">Employee Details</h3>
+            <h3 style="margin-left: 10px;">Employee Summary</h3>
           </div>
           
           <div id="reviewStage2Loading" style="display: none; text-align: center; padding: 60px 20px;">
@@ -268,28 +276,28 @@
               </div>
             </div>
 
-            <h3 style="margin: 20px 0 16px 0;">Review Items</h3>
-            <div id="reviewStage2Cards" style="display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));">
+            <h3 style="margin: 20px 0 16px 0;">Review Queue Cards</h3>
+            <div id="reviewStage2Cards" style="display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));">
             </div>
 
-            <h3 style="margin: 24px 0 16px 0;">Review Summary</h3>
+            <h3 style="margin: 24px 0 16px 0;">Overall Financial Summary</h3>
             <div class="panel flush" style="padding: 18px;">
               <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 40px;">
                 <div>
                   <h4 style="margin: 0 0 12px 0; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 8px;">Items</h4>
                   <div class="stat-row"><span>Pending</span><strong id="sumCountPending" class="text-amber">0</strong></div>
-                  <div class="stat-row"><span>Deducted</span><strong id="sumCountDeducted" class="text-red">0</strong></div>
-                  <div class="stat-row"><span>Waived</span><strong id="sumCountWaived" class="text-green">0</strong></div>
-                  <div class="stat-row"><span>Held</span><strong id="sumCountHeld" class="text-blue">0</strong></div>
+                  <div class="stat-row"><span>Completed</span><strong id="sumCountCompleted" class="text-green">0</strong></div>
+                  <div class="stat-row"><span>Legacy Deducted</span><strong id="sumCountDeducted" class="text-red">0</strong></div>
+                  <div class="stat-row"><span>Legacy Waived</span><strong id="sumCountWaived" class="text-green">0</strong></div>
+                  <div class="stat-row"><span>Legacy Held</span><strong id="sumCountHeld" class="text-blue">0</strong></div>
                 </div>
                 <div>
                   <h4 style="margin: 0 0 12px 0; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 8px;">Amounts</h4>
                   <div class="stat-row"><span>Pending Amount</span><strong id="sumAmtPending" class="text-amber">₹0.00</strong></div>
-                  <div class="stat-row"><span>Deducted Amount</span><strong id="sumAmtDeducted" class="text-red">₹0.00</strong></div>
-                  <div class="stat-row"><span>Waived Amount</span><strong id="sumAmtWaived" class="text-green">₹0.00</strong></div>
-                  <div class="stat-row"><span>Held Amount</span><strong id="sumAmtHeld" class="text-blue">₹0.00</strong></div>
+                  <div class="stat-row"><span>Completed Amount</span><strong id="sumAmtCompleted" class="text-green">₹0.00</strong></div>
+                  <div class="stat-row"><span>Legacy Deducted Amount</span><strong id="sumAmtDeducted" class="text-red">₹0.00</strong></div>
                   <div class="stat-row" style="border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px;">
-                    <span>Grand Total</span><strong id="sumAmtTotal" style="font-size: 16px;">₹0.00</strong>
+                    <span>Grand Total Resolved</span><strong id="sumAmtTotal" style="font-size: 16px;">₹0.00</strong>
                   </div>
                 </div>
               </div>
@@ -297,20 +305,6 @@
           </div>
         </div>
 
-        <div id="reviewStage3" style="display: none;">
-          <div class="toolbar">
-            <button id="backToStage2Btn" class="secondary">← Back to Items</button>
-            <h3 id="stage3Title" style="margin-left: 10px;">History (Last 2 Years)</h3>
-          </div>
-          <div class="panel flush">
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Issue Date</th><th>Month</th><th>Year</th><th>Unit</th><th>Issued Qty</th><th>Allowed Qty</th><th>Previous Decision</th></tr></thead>
-                <tbody id="reviewStage3Rows"></tbody>
-              </table>
-            </div>
-          </div>
-        </div>
       </section>
 
       <section class="view" id="deductions">
@@ -345,7 +339,7 @@
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Date</th><th>Code</th><th>Name</th><th>Unit</th><th>Item</th><th>Reason</th><th>Remarks</th></tr></thead>
+              <thead><tr><th>Date</th><th>Code</th><th>Name</th><th>Unit</th><th>Item</th><th>Qty</th><th>Reason</th><th>Remarks</th></tr></thead>
               <tbody id="waiveRows"></tbody>
             </table>
           </div>
@@ -421,135 +415,64 @@
 
     </main>
 
-    <div id="importPreviewModal" class="modal-backdrop">
-      <div class="modal" style="width: 90vw; max-width: 1200px;">
+    <!-- NEW UX REQUIREMENT: Dedicated Review Dialog (Modal) -->
+    <div id="individualReviewModal" class="modal-backdrop">
+      <form id="individualReviewForm" class="modal" style="width: 90vw; max-width: 1040px; height: 90vh;">
         <header class="modal-header">
           <div>
-            <h3>Import Validation Preview</h3>
-            <p>Review validation errors and duplicates before committing.</p>
+            <h3 id="indRevTitle">Review Excess Transactions</h3>
+            <p id="indRevSubtitle" style="color: var(--muted); font-size: 13px;"></p>
           </div>
-          <button id="cancelPreviewBtn" class="secondary" type="button">Cancel</button>
+          <button type="button" class="secondary" onclick="closeIndividualReviewModal()">Close</button>
         </header>
-        <div class="panel" style="margin: 18px;">
-            <div class="mini-stats" style="grid-template-columns: repeat(5, minmax(130px, 1fr));">
-              <article><span>Worksheet Rows</span><strong id="previewTotal">0</strong></article>
-              <article><span>Valid Rows</span><strong id="previewValid" class="text-green">0</strong></article>
-              <article><span>Invalid Rows</span><strong id="previewErrors" class="text-red">0</strong></article>
-              <article><span>Duplicate Rows</span><strong id="previewDuplicates" class="text-amber">0</strong></article>
-              <article><span>Generated Issues</span><strong id="previewIssues">0</strong></article>
+        <div style="padding: 24px; overflow-y: auto; flex: 1; background: #0b1016;">
+          
+          <h4 style="color: var(--muted); margin: 0 0 12px; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Section 1: Employee Summary</h4>
+          <div class="mini-stats" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); margin-bottom: 24px;" id="indRevSummary"></div>
+          
+          <h4 style="color: var(--muted); margin: 0 0 12px; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Section 2: Past Two Years History</h4>
+          <div class="panel flush" style="margin-bottom: 24px;">
+            <div class="table-wrap">
+              <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                <thead style="background: #1e2733;">
+                    <tr>
+                        <th style="padding: 10px; border: 1px solid var(--line); text-align: left; color: #b9c4cf;">Date</th>
+                        <th style="padding: 10px; border: 1px solid var(--line); text-align: left; color: #b9c4cf;">Qty</th>
+                        <th style="padding: 10px; border: 1px solid var(--line); text-align: left; color: #b9c4cf;">Unit</th>
+                        <th style="padding: 10px; border: 1px solid var(--line); text-align: left; color: #b9c4cf;">Period</th>
+                        <th style="padding: 10px; border: 1px solid var(--line); text-align: left; color: #b9c4cf;">Remarks</th>
+                    </tr>
+                </thead>
+                <tbody id="indRevHistoryRows"></tbody>
+              </table>
             </div>
-            <div class="table-wrap" style="max-height: 400px; overflow: auto; border: 1px solid var(--line); border-radius: 6px;">
-                <table>
-                    <thead><tr><th>Row</th><th>Code</th><th>Name</th><th>Reason</th></tr></thead>
-                    <tbody id="previewErrorRows"></tbody>
-                </table>
-            </div>
-        </div>
-        <footer class="modal-footer">
-          <button id="commitImportBtn" class="primary" type="button">Confirm & Import</button>
-        </footer>
-      </div>
-    </div>
+          </div>
 
-    <div id="progressModal" class="modal-backdrop">
-      <div class="modal" style="width: 460px; text-align: center;">
-        <div class="panel flush" style="margin: 0;">
-          <div style="padding: 32px 24px;">
-            <h3 style="margin: 0 0 16px; font-size: 18px;">Processing Data...</h3>
-            
-            <div style="display: flex; justify-content: space-between; font-size: 13px; color: var(--ink); font-weight: 600; margin-bottom: 8px;">
-              <span id="progressStatus" style="color: var(--muted); text-align: left;">Please wait...</span>
-              <span id="progressTime" style="color: var(--blue);">00:00</span>
-            </div>
-            
-            <div style="background: #111821; border-radius: 8px; height: 16px; overflow: hidden; border: 1px solid var(--line); margin-bottom: 8px;">
-              <div id="progressBar" style="background: var(--blue); width: 0%; height: 100%; transition: width 0.2s ease;"></div>
-            </div>
-            
-            <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 700; color: var(--ink);">
-              <span>Progress</span>
-              <span id="progressPercent">0%</span>
-            </div>
+          <h4 style="color: var(--muted); margin: 0 0 12px; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Section 3: Individual Excess Transaction Review</h4>
+          <div id="indRevTransactions" style="margin-bottom: 24px;"></div>
+
+          <h4 style="color: var(--muted); margin: 0 0 12px; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Section 4: Review Summary</h4>
+          <div class="panel flush" style="background: #111821; margin-bottom: 0;">
+             <div style="padding: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 14px;" id="indRevCalculatedTotals">
+             </div>
           </div>
         </div>
-      </div>
-    </div>
-
-    <div id="importModal" class="modal-backdrop">
-      <div class="modal">
-        <header class="modal-header">
-          <div>
-            <h3>Review Workbook Sheets</h3>
-            <p id="importModalSubtitle">Select the sheet that contains the employee distribution data.</p>
-          </div>
-          <button id="closeImportModal" class="secondary" type="button">Cancel</button>
-        </header>
-        <div id="sheetCandidates" class="candidate-list"></div>
-        <footer class="modal-footer">
-          <button id="confirmImportBtn" class="primary" type="button" disabled>Preview Data</button>
-        </footer>
-      </div>
-    </div>
-
-    <div id="employeeModal" class="modal-backdrop">
-      <form id="employeeForm" class="modal employee-modal">
-        <header class="modal-header">
-          <div>
-            <h3>Edit Employee</h3>
-            <p>Update imported master data stored on this PC.</p>
-          </div>
-          <button id="closeEmployeeModal" class="secondary" type="button">Cancel</button>
-        </header>
-        <div class="employee-form-grid">
-          <label>Employee Code<input name="employee_code" readonly /></label>
-          <label>Employee Name<input name="employee_name" required /></label>
-          <label>Father Name<input name="father_name" /></label>
-          <label>Unit<input name="unit" /></label>
-          <label>Godown<input name="godown" /></label>
-          <label>Mobile<input name="mobile_number" /></label>
-          <label>Designation<input name="designation" /></label>
-          <label>Status<input name="status" /></label>
-        </div>
-        <footer class="modal-footer">
-          <button class="primary" type="submit">Save Employee</button>
-        </footer>
-      </form>
-    </div>
-
-    <div id="reviewDecisionModal" class="modal-backdrop">
-      <form id="reviewDecisionForm" class="modal employee-modal">
-        <header class="modal-header">
-          <div>
-            <h3 id="reviewDecisionTitle">Review Decision</h3>
-            <p id="reviewDecisionSubtitle">Record approval details for audit history.</p>
-          </div>
-          <button id="closeReviewDecisionModal" class="secondary" type="button">Cancel</button>
-        </header>
-        <div class="employee-form-grid">
-          <input name="id" type="hidden" />
-          <input name="status" type="hidden" />
-          <label><span id="decisionByLabel">Approved By</span><input name="approved_by" required /></label>
-          <label>Reason<input name="reason" /></label>
-          <label class="wide-label">Remarks<input name="remarks" /></label>
-        </div>
-        <footer class="modal-footer">
-          <button class="primary" type="submit">Save Decision</button>
-        </footer>
-      </form>
-    </div>
-
-    <div id="distributionModal" class="modal-backdrop">
-      <form id="distributionForm" class="modal">
-        <header class="modal-header">
-          <div>
-            <h3 id="distributionModalTitle">Edit Distribution Row</h3>
-            <p id="distributionModalSubtitle">Update item quantities for this employee/month row.</p>
-          </div>
-          <button id="closeDistributionModal" class="secondary" type="button">Cancel</button>
-        </header>
-        <div id="distributionQuantityFields" class="employee-form-grid"></div>
-        <footer class="modal-footer">
-          <button class="primary" type="submit">Save Distribution</button>
+        
+        <footer class="modal-footer" style="background: var(--panel); justify-content: space-between; padding: 16px 24px;">
+            <div style="display: flex; gap: 16px; align-items: center;">
+                <label style="display:flex; align-items:center; gap:8px;">
+                    <span style="color:var(--muted); font-size: 13px;">Approved By:</span>
+                    <input type="text" id="indRevApprovedBy" required style="width: 200px; background: #111821; border: 1px solid var(--line); color: #fff; padding: 8px 10px; border-radius: 4px;" />
+                </label>
+                <label style="display:flex; align-items:center; gap:8px;">
+                    <span style="color:var(--muted); font-size: 13px;">Reason:</span>
+                    <input type="text" id="indRevGeneralReason" required placeholder="General reason..." style="width: 280px; background: #111821; border: 1px solid var(--line); color: #fff; padding: 8px 10px; border-radius: 4px;" />
+                </label>
+            </div>
+            <div style="display: flex; align-items: center;">
+                <span id="indRevSaveMsg" style="color: var(--amber); margin-right: 16px; font-size: 13px; font-weight: 600;"></span>
+                <button class="primary" type="submit" id="indRevSaveBtn">Save Decisions</button>
+            </div>
         </footer>
       </form>
     </div>
