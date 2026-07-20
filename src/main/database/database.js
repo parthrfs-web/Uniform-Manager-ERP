@@ -151,8 +151,30 @@ const APP_SCHEMA = {
     "remarks TEXT",
     "reviewed_by TEXT",
     "reviewed_at TEXT",
+    "batch_id INTEGER",
     "created_at TEXT NOT NULL",
     "FOREIGN KEY(review_queue_id) REFERENCES review_queue(id) ON DELETE CASCADE"
+  ],
+  payroll_batches: [
+    "id INTEGER PRIMARY KEY AUTOINCREMENT",
+    "batch_number TEXT NOT NULL",
+    "payroll_month TEXT NOT NULL",
+    "generated_by TEXT NOT NULL",
+    "total_recovery_amount REAL DEFAULT 0",
+    "created_at TEXT NOT NULL"
+  ],
+  payroll_batch_records: [
+    "id INTEGER PRIMARY KEY AUTOINCREMENT",
+    "batch_id INTEGER NOT NULL",
+    "record_type TEXT NOT NULL",
+    "employee_code TEXT",
+    "employee_name TEXT",
+    "item_name TEXT",
+    "quantity REAL NOT NULL DEFAULT 0",
+    "rate REAL NOT NULL DEFAULT 0",
+    "amount REAL NOT NULL DEFAULT 0",
+    "remarks TEXT",
+    "FOREIGN KEY(batch_id) REFERENCES payroll_batches(id) ON DELETE CASCADE"
   ],
   salary_deductions: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",

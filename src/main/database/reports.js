@@ -95,7 +95,6 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
           ORDER BY CASE WHEN r.status = 'Pending' THEN 0 ELSE 1 END, r.created_at ASC, r.id ASC LIMIT 500
       `).map((row) => ({ ...row, category: classifyReviewReason(row.reason) }));
         
-      const reviewSummaryRows = all("SELECT reason, status, COUNT(*) AS row_count FROM review_queue GROUP BY reason, status");
       const missingPolicySuggestions = all(
         `SELECT unit, item_name, COUNT(*) AS case_count, MIN(employee_code) AS sample_employee_code, MIN(employee_name) AS sample_employee_name
          FROM review_queue
@@ -103,16 +102,8 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
          GROUP BY lower(unit), lower(item_name) ORDER BY unit, item_name`
       );
       
-      const reviewSummary = reviewSummaryRows.reduce((summary, row) => {
-        const key = classifyReviewReason(row.reason);
-        if (!summary[key]) summary[key] = { total: 0, pending: 0 };
-        summary[key].total += Number(row.row_count || 0);
-        if (row.status === "Pending") summary[key].pending += Number(row.row_count || 0);
-        return summary;
-      }, {});
-      
-      const reviewPendingCount = scalar("SELECT COUNT(*) FROM review_queue WHERE status = 'Pending'");
-      const reviewTotalCount = scalar("SELECT COUNT(*) FROM review_queue");
+      const reviewPendingCount = scalar("SELECT COUNT(*) FROM review_queue_items WHERE decision = 'Pending'");
+      const reviewTotalCount = scalar("SELECT COUNT(*) FROM review_queue_items");
       const uniformIssueCount = scalar("SELECT COUNT(*) FROM uniform_issues WHERE quantity > 0");
       const distributionRows = [...matrixByEmployee.values()]
         .sort((a, b) =>
@@ -128,27 +119,8 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         policies,
         items: all("SELECT *, CASE WHEN available_stock <= minimum_stock THEN 1 ELSE 0 END AS is_low_stock FROM uniform_items ORDER BY item_name, size"),
         stockMovements: all("SELECT * FROM stock_movements ORDER BY created_at DESC, id DESC LIMIT 100"),
-        salaryDeductions: all(`
-            SELECT s.*, r.item_name, r.item_cost, r.issued_qty,
-                   (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Deduct') as excess_qty
-            FROM salary_deductions s
-            LEFT JOIN review_queue r ON s.review_id = r.id
-            ORDER BY s.created_at DESC, s.id DESC
-        `),
-        waiveRecords: all(`
-            SELECT w.*, r.item_name,
-                   (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Waive') as quantity
-            FROM waive_records w
-            LEFT JOIN review_queue r ON w.review_id = r.id
-            ORDER BY w.created_at DESC, w.id DESC
-        `),
-        holdRecords: all(`
-            SELECT r.*,
-                   (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Hold') as excess_qty
-            FROM review_queue r
-            WHERE (SELECT COUNT(*) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Hold') > 0
-            ORDER BY r.decided_at DESC, r.id DESC
-        `),
+        childDecisionStats: all("SELECT decision, COUNT(*) as count, SUM(quantity) as qty FROM review_queue_items GROUP BY decision"),
+        payrollBatches: all("SELECT * FROM payroll_batches ORDER BY created_at DESC"),
         reviewDecisions: all("SELECT * FROM review_decisions ORDER BY created_at DESC, id DESC LIMIT 200"),
         recoveryRecords: all("SELECT * FROM recovery_records ORDER BY created_at DESC, id DESC"),
         uniformIssueMatrix: {
@@ -163,8 +135,107 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         reviewPendingCount,
         reviewTotalCount,
         missingPolicySuggestions,
-        reviewSummary,
         audit: all("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 50"),
       };
+    },
+
+    generatePayrollBatch(payload) {
+        const unbatched = all(`
+            SELECT rqi.*, rq.item_cost, 
+                   (SELECT employee_name FROM employees WHERE employee_code = rqi.employee_code) as emp_name
+            FROM review_queue_items rqi
+            JOIN review_queue rq ON rqi.review_queue_id = rq.id
+            WHERE rqi.batch_id IS NULL AND rqi.decision IN ('Deduct', 'Waive', 'Hold')
+        `);
+
+        if (unbatched.length === 0) {
+            throw new Error("No unbatched review decisions found to generate a report.");
+        }
+
+        db.run("BEGIN TRANSACTION");
+        try {
+            const nextId = scalar("SELECT COALESCE(MAX(id), 0) + 1 FROM payroll_batches");
+            const batchNum = `PR-${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}-${String(nextId).padStart(3, '0')}`;
+            
+            let totalRecovery = 0;
+
+            db.run(
+                `INSERT INTO payroll_batches (batch_number, payroll_month, generated_by, created_at) VALUES (?, ?, ?, ?)`,
+                [batchNum, payload.payroll_month, payload.generated_by, now()]
+            );
+            const batchId = scalar("SELECT last_insert_rowid()");
+
+            for (const item of unbatched) {
+                const rate = Number(item.item_cost || 0);
+                const amount = item.decision === 'Deduct' ? (Number(item.quantity) * rate) : 0;
+                
+                if (item.decision === 'Deduct') {
+                    totalRecovery += amount;
+                }
+
+                db.run(
+                    `INSERT INTO payroll_batch_records (batch_id, record_type, employee_code, employee_name, item_name, quantity, rate, amount, remarks) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [batchId, item.decision, item.employee_code, item.emp_name || item.employee_code, item.item_name, item.quantity, rate, amount, item.remarks]
+                );
+
+                db.run(`UPDATE review_queue_items SET batch_id = ? WHERE id = ?`, [batchId, item.id]);
+            }
+
+            db.run(`UPDATE payroll_batches SET total_recovery_amount = ? WHERE id = ?`, [totalRecovery, batchId]);
+
+            db.run("COMMIT");
+            return batchId;
+        } catch(e) {
+            db.run("ROLLBACK");
+            throw e;
+        }
+    },
+
+    getPayrollBatchData(batchId) {
+        const batch = all("SELECT * FROM payroll_batches WHERE id = ?", [Number(batchId)])[0];
+        if (!batch) throw new Error("Batch not found.");
+        const records = all("SELECT * FROM payroll_batch_records WHERE batch_id = ?", [Number(batchId)]);
+        return { batch, records };
+    },
+
+    deletePayrollArchive() {
+        const batchCount = Number(scalar("SELECT COUNT(*) FROM payroll_batches") || 0);
+        const recordCount = Number(scalar("SELECT COUNT(*) FROM payroll_batch_records") || 0);
+
+        if (batchCount === 0 && recordCount === 0) {
+            return {
+                deleted: false,
+                message: "No archived payroll reports found.",
+                deletedBatches: 0,
+                deletedRecords: 0,
+            };
+        }
+
+        db.run("BEGIN TRANSACTION");
+        try {
+            db.run("UPDATE review_queue_items SET batch_id = NULL WHERE batch_id IS NOT NULL");
+            db.run("DELETE FROM payroll_batch_records");
+            db.run("DELETE FROM payroll_batches");
+            db.run("COMMIT");
+        } catch (error) {
+            db.run("ROLLBACK");
+            throw error;
+        }
+
+        audit("Payroll Archive Deleted", "All archived payroll reports were permanently deleted.", {
+            entityType: "Payroll Archive",
+            oldValue: { payroll_batches: batchCount, payroll_batch_records: recordCount },
+            result: "Success",
+            remarks: "Operational data was not deleted.",
+        });
+        save();
+
+        return {
+            deleted: true,
+            message: "Payroll Archive deleted successfully.",
+            deletedBatches: batchCount,
+            deletedRecords: recordCount,
+        };
     }
 });

@@ -18,12 +18,15 @@ function render() {
   const todayImports = imports.filter(i => (i.imported_at || "").startsWith(todayStr)).length;
   const monthImports = imports.filter(i => (i.imported_at || "").startsWith(monthStr)).length;
 
-  const salaryDeductions = state.salaryDeductions || [];
-  const recoveredTotal = salaryDeductions.reduce((sum, row) => sum + Number(row.amount || 0), 0);
-  const deductedCases = salaryDeductions.length;
-
-  const heldCount = (state.holdRecords || []).length;
-  const waivedCount = (state.waiveRecords || []).length;
+  const getChildStat = (dec) => {
+     const stat = (state.childDecisionStats || []).find(s => s.decision === dec);
+     return stat ? stat.count : 0;
+  };
+  
+  const deductedCases = getChildStat('Deduct');
+  const heldCount = getChildStat('Hold');
+  const waivedCount = getChildStat('Waive');
+  const recoveredTotal = (state.payrollBatches || []).reduce((sum, b) => sum + Number(b.total_recovery_amount || 0), 0);
 
   // DOM Card Updates
   document.getElementById("dashActiveEmployees").textContent = activeEmployees;
@@ -111,16 +114,8 @@ function renderTopLists() {
 
   // 3. Top 10 Employees with highest recoveries
   const empRecoveryMap = new Map();
-  (state.salaryDeductions || []).forEach(row => {
-     if(Number(row.amount) > 0) {
-       const label = `${row.employee_code} - ${row.employee_name}`;
-       empRecoveryMap.set(label, (empRecoveryMap.get(label) || 0) + Number(row.amount || 0));
-     }
-  });
-  const topRecoveries = [...empRecoveryMap.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10);
-  renderHtml("topEmployeesRecovery", topRecoveries.map(([emp, amt]) => `<tr><td>${escapeHtml(emp)}</td><td>${formatCompactMoney(amt)}</td></tr>`).join(""), `<tr><td colspan="2" class="empty">No recoveries yet.</td></tr>`);
+  // We can't use live state.salaryDeductions easily here, query batches or simplify. Omitted detailed historical mapping for dashboard.
+  renderHtml("topEmployeesRecovery", `<tr><td colspan="2" class="empty">View recovery totals in archived reports.</td></tr>`);
 
   // 4. Most Common Excess Items (From Pending Reviews)
   const excessItemMap = new Map();
@@ -201,5 +196,90 @@ document.getElementById("resetDataBtn")?.addEventListener("click", async () => {
     toast("Imported data reset. You can import again now.");
   } catch (error) {
     showImportError(error.message || "Reset failed.");
+  }
+});
+
+let payrollArchiveDeleteStep = 1;
+const payrollArchiveDeletePhrase = "DELETE PAYROLL ARCHIVE";
+
+function closePayrollArchiveDeleteModal() {
+  const modal = document.getElementById("deletePayrollArchiveModal");
+  if (modal) modal.classList.remove("show");
+  const input = document.getElementById("deletePayrollArchiveConfirmInput");
+  if (input) input.value = "";
+}
+
+function renderPayrollArchiveDeleteStep(step) {
+  payrollArchiveDeleteStep = step;
+  const modal = document.getElementById("deletePayrollArchiveModal");
+  const title = document.getElementById("deletePayrollArchiveTitle");
+  const message = document.getElementById("deletePayrollArchiveMessage");
+  const inputWrap = document.getElementById("deletePayrollArchiveConfirmWrap");
+  const input = document.getElementById("deletePayrollArchiveConfirmInput");
+  const confirmButton = document.getElementById("confirmPayrollArchiveDeleteBtn");
+  if (!modal || !title || !message || !inputWrap || !input || !confirmButton) return;
+
+  input.value = "";
+  inputWrap.style.display = "none";
+  confirmButton.disabled = false;
+
+  if (step === 1) {
+    title.textContent = "Delete Payroll Archive";
+    message.textContent = "You are about to permanently delete ALL archived payroll reports.\n\nThis action cannot be undone.";
+    confirmButton.textContent = "Continue";
+  } else if (step === 2) {
+    title.textContent = "Final Warning";
+    message.textContent = "This will permanently delete every archived payroll batch, archived payroll report, archived deduction register, archived waiver register and archived hold register.\n\nHistorical payroll records will no longer be available.\n\nThis action is irreversible.";
+    confirmButton.textContent = "I Understand";
+  } else {
+    title.textContent = "Type to Confirm";
+    message.textContent = "To permanently delete the Payroll Archive,\n\ntype exactly\n\nDELETE PAYROLL ARCHIVE";
+    inputWrap.style.display = "block";
+    confirmButton.textContent = "Delete Forever";
+    confirmButton.disabled = true;
+    setTimeout(() => input.focus(), 0);
+  }
+
+  modal.classList.add("show");
+}
+
+document.getElementById("deletePayrollArchiveBtn")?.addEventListener("click", () => {
+  if (!desktopApi) return showImportError("Works only in Desktop App.");
+  if (!state?.payrollBatches || state.payrollBatches.length === 0) {
+    toast("No archived payroll reports found.");
+    return;
+  }
+  renderPayrollArchiveDeleteStep(1);
+});
+
+document.getElementById("deletePayrollArchiveConfirmInput")?.addEventListener("input", (event) => {
+  const confirmButton = document.getElementById("confirmPayrollArchiveDeleteBtn");
+  if (confirmButton) confirmButton.disabled = event.target.value !== payrollArchiveDeletePhrase;
+});
+
+document.getElementById("cancelPayrollArchiveDeleteTop")?.addEventListener("click", closePayrollArchiveDeleteModal);
+document.getElementById("cancelPayrollArchiveDeleteBtn")?.addEventListener("click", closePayrollArchiveDeleteModal);
+
+document.getElementById("confirmPayrollArchiveDeleteBtn")?.addEventListener("click", async () => {
+  if (payrollArchiveDeleteStep < 3) {
+    renderPayrollArchiveDeleteStep(payrollArchiveDeleteStep + 1);
+    return;
+  }
+
+  try {
+    startProgress();
+    const statusEl = document.getElementById("progressStatus");
+    if (statusEl) statusEl.textContent = "Deleting payroll archive...";
+    const result = await window.uniformManager.deletePayrollArchive();
+    state = result.state || await window.uniformManager.getState({ distributionLimit });
+    closePayrollArchiveDeleteModal();
+    if (window.resetPayrollArchiveView) window.resetPayrollArchiveView();
+    render();
+    setView("deductions");
+    stopProgress();
+    toast(result.deleted ? "Payroll Archive deleted successfully." : "No archived payroll reports found.");
+  } catch (error) {
+    stopProgress();
+    showImportError(error.message || "Payroll Archive deletion failed.");
   }
 });

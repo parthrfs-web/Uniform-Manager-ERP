@@ -1,9 +1,6 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const safeInvoke = async (channel, ...args) => {
-  if (channel === "app:chooseAndImportWorkbook" || channel === "app:previewImportSelectedSheet" || channel === "app:commitImport") {
-    console.log("IPC sent", channel);
-  }
   const result = await ipcRenderer.invoke(channel, ...args);
   if (result && !result.ok) {
     throw new Error(result.error || "IPC communication failed");
@@ -23,12 +20,18 @@ contextBridge.exposeInMainWorld("uniformManager", {
   upsertPolicy: (policy) => safeInvoke("app:upsertPolicy", policy),
   deletePolicy: (policyId) => safeInvoke("app:deletePolicy", policyId),
   recalculateReviews: () => safeInvoke("app:recalculateReviews"),
+  generatePayrollBatch: (payload) => safeInvoke("app:generatePayrollBatch", payload),
+  getPayrollBatchData: (batchId) => safeInvoke("app:getPayrollBatchData", batchId),
+  deletePayrollArchive: () => safeInvoke("app:deletePayrollArchive"),
   upsertItem: (item) => safeInvoke("app:upsertItem", item),
   deleteItem: (itemId) => safeInvoke("app:deleteItem", itemId),
   updateReview: (action) => safeInvoke("app:updateReview", action),
   deleteReview: (reviewId) => safeInvoke("app:deleteReview", reviewId),
   updateDistributionRow: (record) => safeInvoke("app:updateDistributionRow", record),
   deleteDistributionRow: (key) => safeInvoke("app:deleteDistributionRow", key),
+  updateUniformIssue: (issue) => safeInvoke("app:updateUniformIssue", issue),
+  deleteUniformIssue: (id) => safeInvoke("app:deleteUniformIssue", id),
+  bulkDeleteUniformIssues: (ids) => safeInvoke("app:bulkDeleteUniformIssues", ids),
   openDeductionReport: (filePath) => safeInvoke("app:openDeductionReport", filePath),
   updateEmployee: (employee) => safeInvoke("app:updateEmployee", employee),
   deleteEmployee: (employeeCode) => safeInvoke("app:deleteEmployee", employeeCode),

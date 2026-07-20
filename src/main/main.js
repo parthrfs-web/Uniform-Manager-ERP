@@ -68,7 +68,6 @@ function runImportWorker(message) {
 }
 
 ipcMain.handle("app:chooseAndImportWorkbook", () => handleSafe(async () => {
-  console.log("Import IPC received");
   const result = await dialog.showOpenDialog({
     title: "Import Employee Master",
     filters: [{ name: "Excel Workbooks", extensions: ["xlsx", "xls", "xlsm", "xlsb", "csv"] }],
@@ -87,7 +86,6 @@ ipcMain.handle("app:chooseAndImportWorkbook", () => handleSafe(async () => {
 }));
 
 ipcMain.handle("app:previewImportSelectedSheet", (_event, request) => handleSafe(async () => {
-  console.log("Import preview IPC received");
   const start = Date.now();
   const parsedRaw = await runImportWorker({ type: "parse-workbook", filePath: request.filePath, sheetName: request.sheetName });
 
@@ -175,7 +173,6 @@ ipcMain.handle("app:previewImportSelectedSheet", (_event, request) => handleSafe
 }));
 
 ipcMain.handle("app:commitImport", async (event) => {
-  console.log("Import commit IPC received");
   try {
     const result = await (async () => {
       await yieldEventLoop();
@@ -268,7 +265,6 @@ ipcMain.handle("app:commitImport", async (event) => {
       safeData.summary.durationMs = (safeData.durationMs || 0) + (Date.now() - start);
       safeData.summary.failedCount = safeData.validationErrors.length;
       safeData.summary.duplicateCount = safeData.summary.duplicateWorksheetRows || 0;
-      console.log("Import committed");
 
       pendingImportCache = null;
       event.sender.send("import-progress", { progress: 100, status: "Complete!" });
@@ -282,8 +278,10 @@ ipcMain.handle("app:commitImport", async (event) => {
   }
 });
 
+// ====== BACKUP & RESTORE MODULE ======
+
 ipcMain.handle("app:backupDatabase", async () => handleSafe(async () => {
-  db.save();
+  db.save(); // Ensure all pending memory changes are flushed to disk
   
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
@@ -316,6 +314,7 @@ ipcMain.handle("app:restoreDatabase", async () => handleSafe(async () => {
 
   const filePath = result.filePaths[0];
 
+  // 1. File Signature Validation
   const buffer = Buffer.alloc(16);
   const fd = fs.openSync(filePath, 'r');
   fs.readSync(fd, buffer, 0, 16, 0);
@@ -325,6 +324,7 @@ ipcMain.handle("app:restoreDatabase", async () => handleSafe(async () => {
     throw new Error("Invalid backup file. The selected file is not a valid SQLite database.");
   }
 
+  // 2. Schema Compatibility Validation
   const SQL = await initSqlJs();
   let tempDb;
   try {
@@ -341,32 +341,39 @@ ipcMain.handle("app:restoreDatabase", async () => handleSafe(async () => {
     if (tempDb) tempDb.close();
   }
 
+  // 3. Execute Restore
   fs.copyFileSync(filePath, db.dbPath);
+
+  // 4. Application Restart automatically reloads the DB file from disk
   app.relaunch();
   app.exit(0);
 
   return { canceled: false };
 }));
 
+// =====================================
+
 ipcMain.handle("app:getReviewQueueStage1", () => handleSafe(() => db.getReviewQueueStage1()));
 ipcMain.handle("app:getReviewQueueStage2", (_event, code) => handleSafe(() => db.getReviewQueueStage2(code)));
-
-ipcMain.handle("app:getReviewQueueStage3", async (_event, req) => {
-  try {
-    const data = await db.getReviewQueueStage3(req);
-    return { ok: true, data };
-  } catch (error) {
-    console.error("\n====== IPC EXCEPTION: app:getReviewQueueStage3 ======");
-    console.error("Payload received:", req);
-    console.error("Stack trace:", error.stack);
-    console.error("=====================================================\n");
-    return { ok: false, error: error.message }; 
-  }
-});
+ipcMain.handle("app:getReviewQueueStage3", (_event, req) => handleSafe(() => db.getReviewQueueStage3(req)));
 
 ipcMain.handle("app:recalculateReviews", async (event) => handleSafe(async () => {
    const generated = await db.recalculateReviews(buildProgressCb(event, "Recalculating review queue"));
    return { generated, state: db.getState() };
+}));
+
+ipcMain.handle("app:generatePayrollBatch", async (_event, payload) => handleSafe(async () => {
+    const batchId = db.generatePayrollBatch(payload);
+    return { batchId, state: db.getState() };
+}));
+
+ipcMain.handle("app:getPayrollBatchData", async (_event, batchId) => handleSafe(async () => {
+    return db.getPayrollBatchData(batchId);
+}));
+
+ipcMain.handle("app:deletePayrollArchive", async () => handleSafe(async () => {
+    const result = db.deletePayrollArchive();
+    return { ...result, state: db.getState() };
 }));
 
 ipcMain.handle("app:upsertPolicy", (_event, policy) => handleSafe(() => { db.upsertPolicy(policy); return db.getState(); }));
