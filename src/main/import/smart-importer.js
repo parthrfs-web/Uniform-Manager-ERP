@@ -34,23 +34,6 @@ function norm(value) {
   return String(value).toLowerCase().trim().replace(/\s+/g, " ");
 }
 
-function employeeIdentityName(value) {
-  return String(value || "").trim().replace(/\s+/g, " ").toUpperCase();
-}
-
-function isManualPlaceholderCode(value) {
-  const code = employeeIdentityName(value);
-  return code === "" || code === "LEFT" || code === "LIFT" || code === "NEW";
-}
-
-function buildEmployeeIdentityCode(employeeCode, employeeName) {
-  const rawCode = String(employeeCode || "").trim();
-  const code = employeeIdentityName(rawCode);
-  if (!isManualPlaceholderCode(rawCode)) return rawCode;
-  const name = employeeIdentityName(employeeName);
-  return `${code}|${name}`;
-}
-
 function compact(value) {
   return norm(value).replace(/[^a-z0-9]+/g, "");
 }
@@ -306,9 +289,9 @@ function parseSheet(sheet, sheetName) {
     return { sheetName, rows: [], header: { ...header, colMap }, parsedRows: [], skipped: 0, info: `${sheetName} (no uniform item columns)`, score: 0 };
   }
 
-  const parsedRows = [];
-  let skipped = 0;
-  let totalIssuesCount = 0;
+  // PASS 1: Read all rows and map workforce identities
+  const rawParsedRows = [];
+  const codeIdentities = new Map();
   let currentSectionPeriod = sheetPeriod;
 
   for (let rowIdx = header.rowIdx + 1; rowIdx < rows.length; rowIdx += 1) {
@@ -318,35 +301,46 @@ function parseSheet(sheet, sheetName) {
 
     let employeeCode = colMap.empCodeIdx !== -1 && row[colMap.empCodeIdx] !== undefined ? String(row[colMap.empCodeIdx]).trim() : "";
     const employeeName = colMap.empNameIdx !== -1 && row[colMap.empNameIdx] !== undefined ? String(row[colMap.empNameIdx]).trim() : "";
-    const itemEntries = [];
-    colMap.itemCols.forEach((column) => {
-      const quantity = parseQuantity(row[column.idx]);
-      if (quantity > 0) itemEntries.push({ itemName: column.name, quantity });
-    });
     const rowPeriod = detectRowPeriod(row);
-    if (rowPeriod.issue_period_label && (!employeeName || !employeeCode) && itemEntries.length === 0) {
+    if (rowPeriod.issue_period_label && (!employeeName || !employeeCode)) {
       currentSectionPeriod = rowPeriod;
       continue;
     }
     
-    // Agar dono code aur name blank hain, toh strictly skip kardo
+    // Strict skip for completely empty identity lines and standard layout artifacts
     if (!employeeCode && !employeeName) continue;
     if (["sr", "total", "grand total", "sub total", "name", "emp code", "sr no", "sr."].includes(employeeCode.toLowerCase())) continue;
-
-    // Apply strict fallback for invalid employee codes. Blank manual rows get a name-qualified identity below.
-    if (employeeCode && ["#ref!", "#n/a", "na", "n/a", "-", "null", "undefined"].includes(employeeCode.toLowerCase())) {
-      employeeCode = "Unknown";
-    }
-    employeeCode = buildEmployeeIdentityCode(employeeCode, employeeName);
 
     const primaryUnit = colMap.unitIdx !== -1 && row[colMap.unitIdx] !== undefined ? String(row[colMap.unitIdx]).trim() : "";
     const godown = colMap.godownIdx !== -1 && row[colMap.godownIdx] !== undefined ? String(row[colMap.godownIdx]).trim() : "";
     if (isSummaryContextValue(primaryUnit) || isSummaryContextValue(godown)) continue;
-    
+
+    // Isolate fallback raw code
+    let rawCode = employeeCode;
+    if (!rawCode || ["#ref!", "#n/a", "na", "n/a", "-", "null", "undefined", "unknown"].includes(rawCode.toLowerCase())) {
+      rawCode = "NULL";
+    }
+
+    const cleanName = employeeName.trim().toUpperCase() || "UNKNOWN";
+    const rawFather = colMap.fatherIdx !== -1 && row[colMap.fatherIdx] !== undefined ? String(row[colMap.fatherIdx]).trim() : "";
+    const cleanFather = rawFather.toUpperCase();
+
+    // Group workforce identities associated with a single raw code
+    const rawCodeUpper = rawCode.toUpperCase();
+    if (!codeIdentities.has(rawCodeUpper)) {
+      codeIdentities.set(rawCodeUpper, new Map());
+    }
+    const nameMap = codeIdentities.get(rawCodeUpper);
+    if (!nameMap.has(cleanName)) {
+      nameMap.set(cleanName, new Set());
+    }
+    nameMap.get(cleanName).add(cleanFather);
+
+    // Resolve isolated distribution periods to this row
+    let issuePeriod = {};
     const rawMonth = colMap.monthIdx !== -1 ? row[colMap.monthIdx] : "";
     const rawDate = colMap.dateIdx !== -1 ? row[colMap.dateIdx] : "";
     
-    let issuePeriod = {};
     if (rawMonth || rawDate) {
       const monthPeriod = parseIssuePeriod(rawMonth, currentSectionPeriod);
       const datePeriod = parseIssuePeriod(rawDate, currentSectionPeriod);
@@ -357,11 +351,69 @@ function parseSheet(sheet, sheetName) {
       issuePeriod = currentSectionPeriod;
     }
 
+    const itemEntries = [];
+    colMap.itemCols.forEach((column) => {
+      const quantity = parseQuantity(row[column.idx]);
+      if (quantity > 0) itemEntries.push({ itemName: column.name, quantity });
+    });
+
+    rawParsedRows.push({
+      rowIdx,
+      rawCode,
+      rawCodeUpper,
+      cleanName,
+      cleanFather,
+      employeeName,
+      rawFather,
+      primaryUnit,
+      godown,
+      issuePeriod,
+      itemEntries,
+      row
+    });
+  }
+
+  // PASS 2: Assign deterministic employee codes and populate dataset
+  const parsedRows = [];
+  let skipped = 0;
+  let totalIssuesCount = 0;
+
+  for (const rawData of rawParsedRows) {
+    const { 
+      rowIdx, rawCode, rawCodeUpper, cleanName, cleanFather, 
+      employeeName, rawFather, primaryUnit, godown, issuePeriod, itemEntries, row 
+    } = rawData;
+
+    const nameMap = codeIdentities.get(rawCodeUpper);
+    let totalDifferentPeople = 0;
+    for (const fathers of nameMap.values()) {
+      totalDifferentPeople += fathers.size;
+    }
+
+    const fathersForThisName = nameMap.get(cleanName);
+    const isNameCollision = fathersForThisName.size > 1;
+
+    let finalCode = rawCode;
+    const isGenericCode = ["NULL", "LEFT", "LIFT", "NEW"].includes(rawCodeUpper) || rawCodeUpper.startsWith("TEMP");
+
+    if (isGenericCode || totalDifferentPeople > 1) {
+      // If the Code and Name are the same, and Father is the same, it's a SINGLE employee.
+      // It reliably generates CODE | NAME without appending the father's name.
+      if (isNameCollision && cleanFather) {
+        finalCode = `${rawCode} | ${cleanName} | ${cleanFather}`;
+      } else {
+        finalCode = `${rawCode} | ${cleanName}`;
+      }
+    } else {
+      // Unique numeric/alpha code associated with exactly one person in the file
+      finalCode = rawCode;
+    }
+
     const worksheetRow = {
       source_row: rowIdx + 1,
-      employee_code: employeeCode,
+      employee_code: finalCode,
       employee_name: employeeName || `Row ${rowIdx + 1}`,
-      father_name: colMap.fatherIdx !== -1 && row[colMap.fatherIdx] !== undefined ? String(row[colMap.fatherIdx]).trim() : "",
+      father_name: rawFather,
       unit: primaryUnit,
       godown: godown,
       mobile_number: colMap.mobileIdx !== -1 && row[colMap.mobileIdx] !== undefined ? String(row[colMap.mobileIdx]).trim() : "",

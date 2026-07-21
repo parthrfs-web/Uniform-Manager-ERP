@@ -1,18 +1,4 @@
 module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, extractAmount, generateDeductionPdf }) => ({
-    reviewIdentity(row) {
-      const code = String(row.employee_code || "");
-      const name = String(row.employee_name || "");
-      return `${code} | ${name}`;
-    },
-    parseReviewIdentity(value) {
-      const text = String(value || "");
-      const parts = text.split(" | ");
-      if (parts.length < 2) return { code: text };
-      return {
-        code: parts[0] || "",
-        name: parts.slice(1).join(" | "),
-      };
-    },
     bulkCreateReviews(reviewRows) {
         // Obsolete function, entitlement logic runs sequentially now
     },
@@ -27,12 +13,6 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           rq.employee_code,
           MAX(rq.employee_name) AS employee_name,
           MAX(rq.unit) AS current_unit,
-          CASE
-            WHEN TRIM(COALESCE(rq.employee_code, '')) <> ''
-             AND TRIM(COALESCE(rq.employee_code, '')) NOT GLOB '*[^0-9]*'
-            THEN 0
-            ELSE 1
-          END AS needs_identity,
           MAX(rq.issue_period_label) AS payroll_month,
           COUNT(rq.id) AS pending_item_count,
           SUM(rq.excess_qty * COALESCE(ui.cost, 0)) AS estimated_deduction
@@ -42,34 +22,11 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
             FROM uniform_items
             GROUP BY lower(item_name)
         ) ui ON lower(rq.item_name) = ui.search_name
-        GROUP BY
-          CASE
-            WHEN TRIM(COALESCE(rq.employee_code, '')) <> ''
-             AND TRIM(COALESCE(rq.employee_code, '')) NOT GLOB '*[^0-9]*'
-            THEN 'code:' || rq.employee_code
-            ELSE 'temp:' || COALESCE(rq.employee_code, '') || '|' || lower(COALESCE(rq.employee_name, ''))
-          END
-        ORDER BY rq.created_at DESC
-      `).map((row) => {
-        if (!Number(row.needs_identity || 0)) return row;
-        return {
-          ...row,
-          employee_code: this.reviewIdentity({
-            employee_code: row.employee_code,
-            employee_name: row.employee_name,
-          }),
-        };
-      });
+        GROUP BY rq.employee_code
+        ORDER BY MAX(rq.created_at) DESC
+      `);
     },
     getReviewQueueStage2(employeeCode) {
-      const identity = this.parseReviewIdentity(employeeCode);
-      const identityFilter = identity.name !== undefined
-        ? {
-            sql: "rq.employee_code = ? AND lower(COALESCE(rq.employee_name, '')) = lower(COALESCE(?, ''))",
-            params: [identity.code, identity.name],
-          }
-        : { sql: "rq.employee_code = ?", params: [identity.code] };
-        
       const rows = all(`
         SELECT 
           rq.*,
@@ -83,9 +40,9 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
             FROM uniform_items
             GROUP BY lower(item_name)
         ) ui ON lower(rq.item_name) = ui.search_name
-        WHERE ${identityFilter.sql}
+        WHERE rq.employee_code = ?
         ORDER BY CASE WHEN rq.status = 'Pending' THEN 0 ELSE 1 END, rq.created_at DESC
-      `, identityFilter.params);
+      `, [employeeCode]);
 
       rows.forEach(row => {
           row.history_items = all(`
