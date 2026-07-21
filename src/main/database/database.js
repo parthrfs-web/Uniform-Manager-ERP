@@ -9,6 +9,7 @@ const createPolicies = require("./policies");
 const createInventory = require("./inventory");
 const createReports = require("./reports");
 const createAudit = require("./audit");
+const createAnalytics = require("./analytics"); // NEW
 
 const ignoredIssueItemSignals = [
   "month", "year", "date", "sr no", "serial", "reg no", "register", "total qty", "total quantity",
@@ -608,7 +609,7 @@ async function createDatabase(userDataPath) {
     save();
   }
 
-const moduleContext = { db, dbPath, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, ensureDefaultPoliciesForIssueRows, extractAmount, generateDeductionPdf };
+  const moduleContext = { db, dbPath, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, ensureDefaultPoliciesForIssueRows, extractAmount, generateDeductionPdf };
 
   const employeeModule = createEmployees(moduleContext);
   const reviewModule = createReviews(moduleContext);
@@ -617,6 +618,7 @@ const moduleContext = { db, dbPath, scalar, all, save, audit, now, normalizeLabe
   const inventoryModule = createInventory(moduleContext);
   const reportModule = createReports(moduleContext);
   const auditModule = createAudit(moduleContext);
+  const analyticsModule = createAnalytics(moduleContext); // NEW
 
   return {
     dbPath,
@@ -629,6 +631,7 @@ const moduleContext = { db, dbPath, scalar, all, save, audit, now, normalizeLabe
     ...inventoryModule,
     ...reportModule,
     ...auditModule,
+    ...analyticsModule, // NEW
   };
 }
 

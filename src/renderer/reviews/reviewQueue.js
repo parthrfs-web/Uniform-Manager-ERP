@@ -9,15 +9,19 @@ async function renderReviewStage1() {
   document.getElementById("reviewStage2").style.display = "none";
 
   const toolbar = document.querySelector("#reviewStage1 .toolbar");
-  if (toolbar && !document.getElementById("reviewSearchInput")) {
-    const searchInput = document.createElement("input");
+  let searchInput = document.getElementById("reviewSearchInput");
+  if (toolbar && !searchInput) {
+    searchInput = document.createElement("input");
     searchInput.id = "reviewSearchInput";
     searchInput.placeholder = "Search by Code, Name, Unit";
+    toolbar.appendChild(searchInput);
+  }
+  if (searchInput && !searchInput.dataset.bound) {
     searchInput.addEventListener("input", (e) => {
       reviewSearchText = e.target.value.toLowerCase();
       renderReviewStage1Rows(summaryCache);
     });
-    toolbar.appendChild(searchInput);
+    searchInput.dataset.bound = "true";
   }
 
   try {

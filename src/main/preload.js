@@ -36,7 +36,12 @@ contextBridge.exposeInMainWorld("uniformManager", {
   updateEmployee: (employee) => safeInvoke("app:updateEmployee", employee),
   deleteEmployee: (employeeCode) => safeInvoke("app:deleteEmployee", employeeCode),
   resetOperationalData: () => safeInvoke("app:resetOperationalData"),
+  resetItemsAndPolicies: () => safeInvoke("app:resetItemsAndPolicies"),
   backupDatabase: () => safeInvoke("app:backupDatabase"),
   restoreDatabase: () => safeInvoke("app:restoreDatabase"),
   exportExcel: (config) => safeInvoke("app:exportExcel", config),
+  
+  // NEW endpoints for Analytics
+  exportAnalyticsExcel: (config) => safeInvoke("app:exportAnalyticsExcel", config),
+  getAnalyticsData: (reportType, filters) => safeInvoke("app:getAnalyticsData", { reportType, filters })
 });

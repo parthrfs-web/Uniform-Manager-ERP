@@ -48,6 +48,27 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       });
       save();
     },
+    resetItemsAndPolicies() {
+      const itemCount = Number(scalar("SELECT COUNT(*) FROM uniform_items") || 0);
+      const policyCount = Number(scalar("SELECT COUNT(*) FROM unit_policies") || 0);
+
+      db.run("BEGIN TRANSACTION");
+      try {
+        db.run("DELETE FROM uniform_items");
+        db.run("DELETE FROM unit_policies");
+        db.run("COMMIT");
+      } catch (error) {
+        db.run("ROLLBACK");
+        throw error;
+      }
+
+      audit("Items and Policies Reset", `${itemCount} inventory item(s) and ${policyCount} unit policy/policies deleted.`, {
+        entityType: "Master Data",
+        remarks: "Operational employees, distribution records, reviews, payroll, imports, settings, and audit history were retained.",
+      });
+      save();
+      return { deletedItems: itemCount, deletedPolicies: policyCount };
+    },
     updateDistributionRow(record) {
       const { key, quantities } = record;
       if (!key || !key.employee_code) throw new Error("Employee code is required.");

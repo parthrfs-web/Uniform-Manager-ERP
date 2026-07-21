@@ -34,6 +34,23 @@ function norm(value) {
   return String(value).toLowerCase().trim().replace(/\s+/g, " ");
 }
 
+function employeeIdentityName(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+function isManualPlaceholderCode(value) {
+  const code = employeeIdentityName(value);
+  return code === "" || code === "LEFT" || code === "LIFT" || code === "NEW";
+}
+
+function buildEmployeeIdentityCode(employeeCode, employeeName) {
+  const rawCode = String(employeeCode || "").trim();
+  const code = employeeIdentityName(rawCode);
+  if (!isManualPlaceholderCode(rawCode)) return rawCode;
+  const name = employeeIdentityName(employeeName);
+  return `${code}|${name}`;
+}
+
 function compact(value) {
   return norm(value).replace(/[^a-z0-9]+/g, "");
 }
@@ -301,8 +318,13 @@ function parseSheet(sheet, sheetName) {
 
     let employeeCode = colMap.empCodeIdx !== -1 && row[colMap.empCodeIdx] !== undefined ? String(row[colMap.empCodeIdx]).trim() : "";
     const employeeName = colMap.empNameIdx !== -1 && row[colMap.empNameIdx] !== undefined ? String(row[colMap.empNameIdx]).trim() : "";
+    const itemEntries = [];
+    colMap.itemCols.forEach((column) => {
+      const quantity = parseQuantity(row[column.idx]);
+      if (quantity > 0) itemEntries.push({ itemName: column.name, quantity });
+    });
     const rowPeriod = detectRowPeriod(row);
-    if (rowPeriod.issue_period_label && (!employeeName || !employeeCode)) {
+    if (rowPeriod.issue_period_label && (!employeeName || !employeeCode) && itemEntries.length === 0) {
       currentSectionPeriod = rowPeriod;
       continue;
     }
@@ -311,16 +333,11 @@ function parseSheet(sheet, sheetName) {
     if (!employeeCode && !employeeName) continue;
     if (["sr", "total", "grand total", "sub total", "name", "emp code", "sr no", "sr."].includes(employeeCode.toLowerCase())) continue;
 
-    // Apply strict fallback for missing or invalid employee codes
-    if (!employeeCode || ["#ref!", "#n/a", "na", "n/a", "-", "null", "undefined"].includes(employeeCode.toLowerCase())) {
+    // Apply strict fallback for invalid employee codes. Blank manual rows get a name-qualified identity below.
+    if (employeeCode && ["#ref!", "#n/a", "na", "n/a", "-", "null", "undefined"].includes(employeeCode.toLowerCase())) {
       employeeCode = "Unknown";
     }
-
-    const itemEntries = [];
-    colMap.itemCols.forEach((column) => {
-      const quantity = parseQuantity(row[column.idx]);
-      if (quantity > 0) itemEntries.push({ itemName: column.name, quantity });
-    });
+    employeeCode = buildEmployeeIdentityCode(employeeCode, employeeName);
 
     const primaryUnit = colMap.unitIdx !== -1 && row[colMap.unitIdx] !== undefined ? String(row[colMap.unitIdx]).trim() : "";
     const godown = colMap.godownIdx !== -1 && row[colMap.godownIdx] !== undefined ? String(row[colMap.godownIdx]).trim() : "";

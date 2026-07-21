@@ -7,6 +7,13 @@ const views = {
   review: ["Review Queue", "Resolve records that need office staff attention."],
   policies: ["Unit Entitlements", "Set allowed uniform quantity for each unit/company and item."],
   reset: ["Data Management", "Backup, restore, or securely reset application data."],
+  
+  // Analytics
+  analytics_monthly: ["Monthly Analytics", "Analyze distribution data filtered strictly by Month & Year."],
+  analytics_yearly: ["Yearly Analytics", "View global distribution operations overview across an entire year."],
+  analytics_unit: ["Unit Wise Analytics", "Pinpoint distribution costs, trends, and top items by client branch."],
+  analytics_item: ["Item Wise Analytics", "Track inventory item distribution lifecycles globally."],
+  analytics_employee: ["Employee Wise Analytics", "Review long-term history and costs attached to specific personnel."]
 };
 
 function setView(name) {

@@ -199,6 +199,80 @@ document.getElementById("resetDataBtn")?.addEventListener("click", async () => {
   }
 });
 
+let itemsAndPoliciesResetStep = 1;
+const itemsAndPoliciesResetPhrase = "RESET ITEMS AND POLICIES";
+
+function closeItemsAndPoliciesResetModal() {
+  const modal = document.getElementById("resetItemsAndPoliciesModal");
+  if (modal) modal.classList.remove("show");
+  const input = document.getElementById("resetItemsAndPoliciesConfirmInput");
+  if (input) input.value = "";
+}
+
+function renderItemsAndPoliciesResetStep(step) {
+  itemsAndPoliciesResetStep = step;
+  const modal = document.getElementById("resetItemsAndPoliciesModal");
+  const title = document.getElementById("resetItemsAndPoliciesTitle");
+  const message = document.getElementById("resetItemsAndPoliciesMessage");
+  const inputWrap = document.getElementById("resetItemsAndPoliciesConfirmWrap");
+  const input = document.getElementById("resetItemsAndPoliciesConfirmInput");
+  const confirmButton = document.getElementById("confirmItemsAndPoliciesResetBtn");
+  if (!modal || !title || !message || !inputWrap || !input || !confirmButton) return;
+
+  input.value = "";
+  inputWrap.style.display = "none";
+  confirmButton.disabled = false;
+
+  if (step === 1) {
+    title.textContent = "Reset Items & Policies";
+    message.textContent = "This will permanently delete every Inventory Item and every Unit Policy.\n\nOperational employee data will NOT be deleted.";
+    confirmButton.textContent = "Continue";
+  } else if (step === 2) {
+    title.textContent = "Final Warning";
+    message.textContent = "After deleting Items and Policies,\n\nautomatic entitlement calculations may stop until new master data is created.\n\nOnly continue if you are preparing the application for a new company.";
+    confirmButton.textContent = "I Understand";
+  } else {
+    title.textContent = "Type To Confirm";
+    message.textContent = "Type exactly\n\nRESET ITEMS AND POLICIES";
+    inputWrap.style.display = "block";
+    confirmButton.textContent = "Reset";
+    confirmButton.disabled = true;
+    setTimeout(() => input.focus(), 0);
+  }
+
+  modal.classList.add("show");
+}
+
+document.getElementById("resetItemsAndPoliciesBtn")?.addEventListener("click", () => {
+  if (!desktopApi) return showImportError("Works only in Desktop App.");
+  renderItemsAndPoliciesResetStep(1);
+});
+
+document.getElementById("resetItemsAndPoliciesConfirmInput")?.addEventListener("input", (event) => {
+  const confirmButton = document.getElementById("confirmItemsAndPoliciesResetBtn");
+  if (confirmButton) confirmButton.disabled = event.target.value !== itemsAndPoliciesResetPhrase;
+});
+
+document.getElementById("cancelItemsAndPoliciesResetTop")?.addEventListener("click", closeItemsAndPoliciesResetModal);
+document.getElementById("cancelItemsAndPoliciesResetBtn")?.addEventListener("click", closeItemsAndPoliciesResetModal);
+
+document.getElementById("confirmItemsAndPoliciesResetBtn")?.addEventListener("click", async () => {
+  if (itemsAndPoliciesResetStep < 3) {
+    renderItemsAndPoliciesResetStep(itemsAndPoliciesResetStep + 1);
+    return;
+  }
+
+  try {
+    const result = await window.uniformManager.resetItemsAndPolicies();
+    state = result.state || await window.uniformManager.getState({ distributionLimit });
+    closeItemsAndPoliciesResetModal();
+    render();
+    toast("Items and Policies have been reset successfully.");
+  } catch (error) {
+    showImportError(error.message || "Items and Policies reset failed.");
+  }
+});
+
 let payrollArchiveDeleteStep = 1;
 const payrollArchiveDeletePhrase = "DELETE PAYROLL ARCHIVE";
 

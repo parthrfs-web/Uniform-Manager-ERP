@@ -4,7 +4,7 @@ const path = require("path");
 const { fork } = require("child_process");
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { createDatabase } = require("./database/database");
-const { exportToExcel } = require('./services/export-engine');
+const { exportToExcel, exportAnalyticsExcel } = require('./services/export-engine');
 
 let db;
 let pendingImportCache = null; 
@@ -278,10 +278,8 @@ ipcMain.handle("app:commitImport", async (event) => {
   }
 });
 
-// ====== BACKUP & RESTORE MODULE ======
-
 ipcMain.handle("app:backupDatabase", async () => handleSafe(async () => {
-  db.save(); // Ensure all pending memory changes are flushed to disk
+  db.save();
   
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
@@ -314,7 +312,6 @@ ipcMain.handle("app:restoreDatabase", async () => handleSafe(async () => {
 
   const filePath = result.filePaths[0];
 
-  // 1. File Signature Validation
   const buffer = Buffer.alloc(16);
   const fd = fs.openSync(filePath, 'r');
   fs.readSync(fd, buffer, 0, 16, 0);
@@ -324,7 +321,6 @@ ipcMain.handle("app:restoreDatabase", async () => handleSafe(async () => {
     throw new Error("Invalid backup file. The selected file is not a valid SQLite database.");
   }
 
-  // 2. Schema Compatibility Validation
   const SQL = await initSqlJs();
   let tempDb;
   try {
@@ -341,17 +337,12 @@ ipcMain.handle("app:restoreDatabase", async () => handleSafe(async () => {
     if (tempDb) tempDb.close();
   }
 
-  // 3. Execute Restore
   fs.copyFileSync(filePath, db.dbPath);
-
-  // 4. Application Restart automatically reloads the DB file from disk
   app.relaunch();
   app.exit(0);
 
   return { canceled: false };
 }));
-
-// =====================================
 
 ipcMain.handle("app:getReviewQueueStage1", () => handleSafe(() => db.getReviewQueueStage1()));
 ipcMain.handle("app:getReviewQueueStage2", (_event, code) => handleSafe(() => db.getReviewQueueStage2(code)));
@@ -403,6 +394,10 @@ ipcMain.handle("app:resetOperationalData", () => handleSafe(async () => {
   if (result.response !== 1) return { canceled: true, state: db.getState() };
   db.resetOperationalData(); return { canceled: false, state: db.getState() };
 }));
+ipcMain.handle("app:resetItemsAndPolicies", () => handleSafe(() => {
+  const result = db.resetItemsAndPolicies();
+  return { ...result, state: db.getState() };
+}));
 
 ipcMain.handle("app:exportExcel", async (event, config) => {
     try {
@@ -413,3 +408,25 @@ ipcMain.handle("app:exportExcel", async (event, config) => {
         return { ok: false, error: error.message };
     }
 });
+
+// NEW IPC: Export Analytics Excel
+ipcMain.handle("app:exportAnalyticsExcel", async (event, config) => {
+    try {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const result = await exportAnalyticsExcel(win, config);
+        return { ok: true, data: result };
+    } catch (error) {
+        return { ok: false, error: error.message };
+    }
+});
+
+// NEW IPC: Analytics Data Retrievals
+ipcMain.handle("app:getAnalyticsData", async (_event, request) => handleSafe(() => {
+    const { reportType, filters } = request;
+    if (reportType === 'monthly') return db.getMonthlyAnalytics(filters);
+    if (reportType === 'yearly') return db.getYearlyAnalytics(filters);
+    if (reportType === 'unit') return db.getUnitWiseAnalytics(filters);
+    if (reportType === 'item') return db.getItemWiseAnalytics(filters);
+    if (reportType === 'employee') return db.getEmployeeWiseAnalytics(filters);
+    throw new Error("Invalid report type");
+}));

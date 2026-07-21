@@ -27,8 +27,16 @@
         <button class="nav-button" data-view="issues">Distribution Register</button>
         <button class="nav-button" data-view="policies">Unit Entitlements</button>
         <button class="nav-button" data-view="review">Review Queue</button>
-        <button class="nav-button" data-view="deductions">Reports</button>
-        <button class="nav-button danger-nav" data-view="reset">Data Management</button>
+        <button class="nav-button" data-view="deductions">Payroll Reports</button>
+        
+        <div style="padding: 12px 13px 4px; color: #5c748c; font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px;">Analytics Reports</div>
+        <button class="nav-button" data-view="analytics_monthly">Monthly Report</button>
+        <button class="nav-button" data-view="analytics_yearly">Yearly Report</button>
+        <button class="nav-button" data-view="analytics_unit">Unit Wise Report</button>
+        <button class="nav-button" data-view="analytics_item">Item Wise Report</button>
+        <button class="nav-button" data-view="analytics_employee">Employee Wise Report</button>
+
+        <button class="nav-button danger-nav" data-view="reset" style="margin-top: 10px;">Data Management</button>
       </nav>
       <div class="db-box">
         <span>Local database</span>
@@ -44,20 +52,18 @@
         </div>
       </header>
 
+      <!-- Dashboard View -->
       <section class="view active" id="dashboard">
         <div id="importError" class="error-panel"></div>
 
-        <!-- QUICK ACTIONS -->
         <div class="panel flush" style="margin-bottom: 18px; padding: 12px 18px; display: flex; gap: 10px; background: #131922;">
           <strong style="margin-right: auto; align-self: center; color: var(--muted);">Quick Actions:</strong>
           <button class="secondary" onclick="setView('import')">Import Excel</button>
           <button class="secondary" onclick="setView('review')">Open Review Queue</button>
           <button class="secondary" onclick="setView('deductions')">Open Reports</button>
-          <button class="secondary" onclick="setView('policies')">Open Policies</button>
-          <button class="secondary" onclick="setView('employees')">Open Employees</button>
+          <button class="secondary" onclick="setView('analytics_monthly')">View Analytics</button>
         </div>
 
-        <!-- SUMMARY & STAT CARDS -->
         <div class="stats" id="dashboardStats" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px;">
           <article><span>Active Employees</span><strong id="dashActiveEmployees">0</strong></article>
           <article><span>Total Employees</span><strong id="dashTotalEmployees">0</strong></article>
@@ -80,15 +86,12 @@
           <article><span>Policies Configured</span><strong id="dashPolicies">0</strong></article>
         </div>
 
-        <!-- LATEST IMPORT -->
         <div class="panel">
           <h3>Latest Import History</h3>
           <div id="lastImport" class="empty">No workbook imported yet.</div>
         </div>
 
-        <!-- TOP LISTS -->
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-bottom: 24px;">
-          
           <div class="panel flush">
             <div class="panel-heading"><h3>Top 10 Units by Excess</h3></div>
             <div class="table-wrap">
@@ -128,10 +131,10 @@
               </table>
             </div>
           </div>
-
         </div>
       </section>
 
+      <!-- Import View -->
       <section class="view" id="import">
         <div class="panel">
           <h3>Import Excel</h3>
@@ -140,6 +143,7 @@
         </div>
       </section>
 
+      <!-- Items View -->
       <section class="view" id="items">
         <form id="itemForm" class="item-form">
           <input name="id" type="hidden" />
@@ -164,6 +168,7 @@
         </div>
       </section>
 
+      <!-- Distribution Register View -->
       <section class="view" id="issues">
         <div class="mini-stats">
           <article><span>Shown Rows</span><strong id="distributionVisibleCount">0</strong><small>employee/month rows</small></article>
@@ -188,6 +193,7 @@
         </div>
       </section>
 
+      <!-- Employees View -->
       <section class="view" id="employees">
         <div class="toolbar">
           <input id="employeeSearch" placeholder="Search code, name, unit, godown or mobile" />
@@ -204,6 +210,7 @@
         </div>
       </section>
 
+      <!-- Data Management / Reset View -->
       <section class="view" id="reset">
         <div class="panel" style="max-width: 760px; margin-bottom: 24px;">
           <div class="panel-heading" style="padding: 0 0 16px 0;">
@@ -225,8 +232,13 @@
             </article>
             <article style="padding: 16px; border: 1px solid #69363c; border-radius: 8px; background: #2a1b20;">
               <h4 style="margin: 0 0 8px; color: var(--red);">Delete Payroll Archive</h4>
-              <p style="color: var(--muted); margin: 0 0 16px; font-size: 13px;">Permanently delete archived payroll batches and archived payroll reports only.</p>
+              <p style="color: var(--muted); margin: 0 0 16px; font-size: 13px;">Permanently delete archived payroll batches and reports only.</p>
               <button id="deletePayrollArchiveBtn" class="danger" type="button" style="width: 100%;">Delete Payroll Archive</button>
+            </article>
+            <article style="padding: 16px; border: 1px solid #69363c; border-radius: 8px; background: #2a1b20;">
+              <h4 style="margin: 0 0 8px; color: var(--red);">Reset Items &amp; Policies</h4>
+              <p style="color: var(--muted); margin: 0 0 16px; font-size: 13px;">Permanently delete inventory items and unit policies for a new company setup.</p>
+              <button id="resetItemsAndPoliciesBtn" class="danger" type="button" style="width: 100%;">Reset Items &amp; Policies</button>
             </article>
           </div>
         </div>
@@ -242,6 +254,7 @@
         </div>
       </section>
 
+      <!-- Review Queue View -->
       <section class="view" id="review">
         <div id="reviewStage1">
           <div class="toolbar" style="display: flex; justify-content: space-between;">
@@ -309,9 +322,9 @@
             </div>
           </div>
         </div>
-
       </section>
 
+      <!-- Deductions & Payroll Reports View -->
       <section class="view" id="deductions">
         <div class="panel flush" style="padding: 18px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; background: #131922;">
           <div style="display: flex; align-items: center; gap: 16px;">
@@ -329,6 +342,7 @@
         <div id="payrollBatchContent"></div>
       </section>
 
+      <!-- Policies / Entitlements View -->
       <section class="view" id="policies">
         <div class="panel flush">
           <div class="panel-heading">
@@ -383,6 +397,7 @@
         </div>
       </section>
 
+      <!-- History View -->
       <section class="view" id="history">
         <div class="two-col">
           <div class="panel">
@@ -396,9 +411,203 @@
         </div>
       </section>
 
+      <!-- ============================================== -->
+      <!-- NEW ANALYTICS MODULE SECTIONS -->
+      <!-- ============================================== -->
+
+      <!-- Analytics: Monthly Report -->
+      <section class="view" id="analytics_monthly">
+        <div class="panel flush" style="padding: 18px; margin-bottom: 18px; background: #131922;">
+            <form id="form_analytics_monthly" class="analytics-form">
+                <div class="primary-filters">
+                    <input type="number" name="fy" placeholder="Financial Year (e.g. 2026)" required />
+                    <select name="month" required>
+                        <option value="">Select Month</option>
+                        <option value="1">January</option><option value="2">February</option>
+                        <option value="3">March</option><option value="4">April</option>
+                        <option value="5">May</option><option value="6">June</option>
+                        <option value="7">July</option><option value="8">August</option>
+                        <option value="9">September</option><option value="10">October</option>
+                        <option value="11">November</option><option value="12">December</option>
+                    </select>
+                    <button type="submit" class="primary">Generate Report</button>
+                </div>
+                <details class="advanced-filters">
+                    <summary>Advanced Filters</summary>
+                    <div class="filter-grid">
+                        <input type="text" name="unit" placeholder="Unit (Optional)" />
+                        <input type="text" name="employee" placeholder="Emp Code (Optional)" />
+                        <input type="text" name="item" placeholder="Item (Optional)" />
+                        <select name="decisionStatus">
+                            <option value="All">All Reviews</option>
+                            <option value="OK">OK (No Excess)</option>
+                            <option value="Pending">Pending</option>
+                            <option value="Deduct">Deducted</option>
+                            <option value="Waive">Waived</option>
+                            <option value="Hold">Held</option>
+                        </select>
+                    </div>
+                </details>
+            </form>
+        </div>
+        <div class="toolbar" style="justify-content: flex-end;">
+            <button id="btn_export_analytics_monthly" class="secondary" disabled>Export Excel</button>
+        </div>
+        <div id="content_analytics_monthly"></div>
+      </section>
+
+      <!-- Analytics: Yearly Report -->
+      <section class="view" id="analytics_yearly">
+        <div class="panel flush" style="padding: 18px; margin-bottom: 18px; background: #131922;">
+            <form id="form_analytics_yearly" class="analytics-form">
+                <div class="primary-filters">
+                    <input type="number" name="fy" placeholder="Financial Year (e.g. 2026)" required />
+                    <button type="submit" class="primary">Generate Report</button>
+                </div>
+                <details class="advanced-filters">
+                    <summary>Advanced Filters</summary>
+                    <div class="filter-grid">
+                        <input type="text" name="unit" placeholder="Unit (Optional)" />
+                        <input type="text" name="employee" placeholder="Emp Code (Optional)" />
+                        <input type="text" name="item" placeholder="Item (Optional)" />
+                        <select name="decisionStatus">
+                            <option value="All">All Reviews</option>
+                            <option value="OK">OK (No Excess)</option>
+                            <option value="Pending">Pending</option>
+                            <option value="Deduct">Deducted</option>
+                            <option value="Waive">Waived</option>
+                            <option value="Hold">Held</option>
+                        </select>
+                    </div>
+                </details>
+            </form>
+        </div>
+        <div class="toolbar" style="justify-content: flex-end;">
+            <button id="btn_export_analytics_yearly" class="secondary" disabled>Export Excel</button>
+        </div>
+        <div id="content_analytics_yearly"></div>
+      </section>
+
+      <!-- Analytics: Unit Wise Report -->
+      <section class="view" id="analytics_unit">
+        <div class="panel flush" style="padding: 18px; margin-bottom: 18px; background: #131922;">
+            <form id="form_analytics_unit" class="analytics-form">
+                <div class="primary-filters">
+                    <input type="number" name="fy" placeholder="Year (e.g. 2026)" required />
+                    <input type="text" name="unit" placeholder="Unit Name" required />
+                    <button type="submit" class="primary">Generate Report</button>
+                </div>
+                <details class="advanced-filters">
+                    <summary>Advanced Filters</summary>
+                    <div class="filter-grid">
+                        <select name="month">
+                            <option value="">Month (Optional)</option>
+                            <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
+                            <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
+                            <option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option>
+                            <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+                        </select>
+                        <input type="text" name="employee" placeholder="Emp Code (Optional)" />
+                        <input type="text" name="item" placeholder="Item (Optional)" />
+                        <select name="decisionStatus">
+                            <option value="All">All Reviews</option>
+                            <option value="OK">OK (No Excess)</option>
+                            <option value="Pending">Pending</option>
+                            <option value="Deduct">Deducted</option>
+                            <option value="Waive">Waived</option>
+                            <option value="Hold">Held</option>
+                        </select>
+                    </div>
+                </details>
+            </form>
+        </div>
+        <div class="toolbar" style="justify-content: flex-end;">
+            <button id="btn_export_analytics_unit" class="secondary" disabled>Export Excel</button>
+        </div>
+        <div id="content_analytics_unit"></div>
+      </section>
+
+      <!-- Analytics: Item Wise Report -->
+      <section class="view" id="analytics_item">
+        <div class="panel flush" style="padding: 18px; margin-bottom: 18px; background: #131922;">
+            <form id="form_analytics_item" class="analytics-form">
+                <div class="primary-filters">
+                    <input type="number" name="fy" placeholder="Year (e.g. 2026)" required />
+                    <input type="text" name="item" placeholder="Item Name" required />
+                    <button type="submit" class="primary">Generate Report</button>
+                </div>
+                <details class="advanced-filters">
+                    <summary>Advanced Filters</summary>
+                    <div class="filter-grid">
+                        <select name="month">
+                            <option value="">Month (Optional)</option>
+                            <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
+                            <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
+                            <option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option>
+                            <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+                        </select>
+                        <input type="text" name="unit" placeholder="Unit (Optional)" />
+                        <input type="text" name="employee" placeholder="Emp Code (Optional)" />
+                        <select name="decisionStatus">
+                            <option value="All">All Reviews</option>
+                            <option value="OK">OK (No Excess)</option>
+                            <option value="Pending">Pending</option>
+                            <option value="Deduct">Deducted</option>
+                            <option value="Waive">Waived</option>
+                            <option value="Hold">Held</option>
+                        </select>
+                    </div>
+                </details>
+            </form>
+        </div>
+        <div class="toolbar" style="justify-content: flex-end;">
+            <button id="btn_export_analytics_item" class="secondary" disabled>Export Excel</button>
+        </div>
+        <div id="content_analytics_item"></div>
+      </section>
+
+      <!-- Analytics: Employee Wise Report -->
+      <section class="view" id="analytics_employee">
+        <div class="panel flush" style="padding: 18px; margin-bottom: 18px; background: #131922;">
+            <form id="form_analytics_employee" class="analytics-form">
+                <div class="primary-filters">
+                    <input type="number" name="fy" placeholder="Year (Optional)" />
+                    <input type="text" name="employee" placeholder="Employee Code" required />
+                    <button type="submit" class="primary">Generate Report</button>
+                </div>
+                <details class="advanced-filters">
+                    <summary>Advanced Filters</summary>
+                    <div class="filter-grid">
+                        <select name="month">
+                            <option value="">Month (Optional)</option>
+                            <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
+                            <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
+                            <option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option>
+                            <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+                        </select>
+                        <input type="text" name="unit" placeholder="Unit (Optional)" />
+                        <input type="text" name="item" placeholder="Item (Optional)" />
+                        <select name="decisionStatus">
+                            <option value="All">All Reviews</option>
+                            <option value="OK">OK (No Excess)</option>
+                            <option value="Pending">Pending</option>
+                            <option value="Deduct">Deducted</option>
+                            <option value="Waive">Waived</option>
+                            <option value="Hold">Held</option>
+                        </select>
+                    </div>
+                </details>
+            </form>
+        </div>
+        <div class="toolbar" style="justify-content: flex-end;">
+            <button id="btn_export_analytics_employee" class="secondary" disabled>Export Excel</button>
+        </div>
+        <div id="content_analytics_employee"></div>
+      </section>
+
     </main>
 
-    <!-- NEW UX REQUIREMENT: Dedicated Review Dialog (Modal) -->
+    <!-- Modals -->
     <div id="individualReviewModal" class="modal-backdrop">
       <form id="individualReviewForm" class="modal" style="width: 90vw; max-width: 1040px; height: 90vh;">
         <header class="modal-header">
@@ -510,7 +719,30 @@
       </div>
     </div>
 
-    <!-- Legacy Modals -->
+    <div id="resetItemsAndPoliciesModal" class="modal-backdrop">
+      <div class="modal" style="width: 560px;">
+        <header class="modal-header">
+          <div>
+            <h3 id="resetItemsAndPoliciesTitle">Reset Items &amp; Policies</h3>
+          </div>
+          <button id="cancelItemsAndPoliciesResetTop" class="secondary" type="button">Cancel</button>
+        </header>
+        <div style="padding: 24px;">
+          <p id="resetItemsAndPoliciesMessage" style="white-space: pre-line; line-height: 1.6; color: var(--ink); margin: 0;"></p>
+          <div id="resetItemsAndPoliciesConfirmWrap" style="display: none; margin-top: 18px;">
+            <label style="display: grid; gap: 8px;">
+              <span style="color: var(--muted); font-size: 13px;">Confirmation text</span>
+              <input id="resetItemsAndPoliciesConfirmInput" type="text" autocomplete="off" style="width: 100%;" />
+            </label>
+          </div>
+        </div>
+        <footer class="modal-footer">
+          <button id="cancelItemsAndPoliciesResetBtn" class="secondary" type="button">Cancel</button>
+          <button id="confirmItemsAndPoliciesResetBtn" class="danger" type="button">Continue</button>
+        </footer>
+      </div>
+    </div>
+
     <div id="importPreviewModal" class="modal-backdrop">
       <div class="modal" style="width: 90vw; max-width: 1200px;">
         <header class="modal-header">
@@ -635,6 +867,7 @@
     <script src="./reviews/reviewQueue.js"></script>
     <script src="./payroll/payroll.js"></script>
     <script src="./import/import.js"></script>
+    <script src="./analytics/analytics.js"></script>
     <script src="./boot.js"></script>
   </body>
 </html>
