@@ -44,7 +44,8 @@ contextBridge.exposeInMainWorld("uniformManager", {
   restoreDatabase: () => safeInvoke("app:restoreDatabase"),
   exportExcel: (config) => safeInvoke("app:exportExcel", config),
   
-  // NEW endpoints for Analytics
   exportAnalyticsExcel: (config) => safeInvoke("app:exportAnalyticsExcel", config),
+  // NEW REQUIREMENT: Decision Register PDF Export API Exposure
+  exportDecisionRegisterPdf: (config) => safeInvoke("app:exportDecisionRegisterPdf", config),
   getAnalyticsData: (reportType, filters) => safeInvoke("app:getAnalyticsData", { reportType, filters })
 });

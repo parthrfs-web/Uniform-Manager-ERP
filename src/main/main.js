@@ -4,7 +4,7 @@ const path = require("path");
 const { fork } = require("child_process");
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { createDatabase } = require("./database/database");
-const { exportToExcel, exportAnalyticsExcel } = require('./services/export-engine');
+const { exportToExcel, exportAnalyticsExcel, exportDecisionRegisterPdf } = require('./services/export-engine');
 const { buildValidatedImport } = require("./import/smart-importer");
 
 let db;
@@ -386,6 +386,17 @@ ipcMain.handle("app:exportAnalyticsExcel", async (event, config) => {
     try {
         const win = BrowserWindow.fromWebContents(event.sender);
         const result = await exportAnalyticsExcel(win, config);
+        return { ok: true, data: result };
+    } catch (error) {
+        return { ok: false, error: error.message };
+    }
+});
+
+// NEW REQUIREMENT: Bridge handler for generating the Decision Register PDF
+ipcMain.handle("app:exportDecisionRegisterPdf", async (event, config) => {
+    try {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const result = await exportDecisionRegisterPdf(win, config);
         return { ok: true, data: result };
     } catch (error) {
         return { ok: false, error: error.message };

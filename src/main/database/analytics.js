@@ -97,6 +97,60 @@ module.exports = ({ db, scalar, all }) => {
         return all(query, params);
     }
 
+    // Generic function to pull live operational ledger data for all Decision Registers
+    function getDecisionRegister(filters) {
+        let where = "WHERE rqi.decision IN ('Deduct', 'Hold', 'Waive')";
+        const params = [];
+
+        if (filters.fy) {
+            where += " AND rq.issue_year = ?";
+            params.push(Number(filters.fy));
+        }
+        if (filters.month) {
+            where += " AND rq.issue_month = ?";
+            params.push(Number(filters.month));
+        }
+        if (filters.unit) {
+            where += " AND lower(COALESCE(rq.unit, e.unit, '')) = lower(?)";
+            params.push(filters.unit);
+        }
+        if (filters.employee) {
+            where += " AND rqi.employee_code = ?";
+            params.push(filters.employee);
+        }
+        if (filters.item) {
+            where += " AND lower(rqi.item_name) = lower(?)";
+            params.push(filters.item);
+        }
+
+        return all(`
+            SELECT
+                rq.issue_month,
+                rq.issue_year,
+                rqi.employee_code,
+                COALESCE(e.employee_name, rq.employee_name, rqi.employee_code) AS employee_name,
+                COALESCE(rq.unit, e.unit, '') AS unit,
+                rqi.item_name,
+                rqi.quantity,
+                rqi.decision,
+                CASE WHEN rqi.decision = 'Deduct' THEN (rqi.quantity * COALESCE(ui_item.cost, rq.item_cost, 0)) ELSE 0 END AS deduction_amount,
+                rqi.reviewed_at AS review_date,
+                rqi.reviewed_by AS approved_by,
+                rqi.remarks,
+                rq.status AS current_status
+            FROM review_queue_items rqi
+            JOIN review_queue rq ON rq.id = rqi.review_queue_id
+            LEFT JOIN employees e ON e.employee_code = rqi.employee_code
+            LEFT JOIN (
+                SELECT lower(item_name) AS search_name, MAX(cost) AS cost
+                FROM uniform_items
+                GROUP BY lower(item_name)
+            ) ui_item ON lower(rqi.item_name) = ui_item.search_name
+            ${where}
+            ORDER BY COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at) DESC, rqi.id DESC
+        `, params);
+    }
+
     return {
         getMonthlyAnalytics(filters) {
             const { where, params, joinReviewQueue } = buildBaseFilter(filters);
@@ -123,7 +177,7 @@ module.exports = ({ db, scalar, all }) => {
 
             const table = getDetailedTable(where, params, joinReviewQueue);
 
-            return { summary, itemWise, unitWise, topEmployees, table };
+            return { summary, itemWise, unitWise, topEmployees, table, decisionRegister: getDecisionRegister(filters) };
         },
 
         getYearlyAnalytics(filters) {
@@ -147,7 +201,7 @@ module.exports = ({ db, scalar, all }) => {
 
             const table = getDetailedTable(where, params, joinReviewQueue);
 
-            return { summary, monthlyTrend, itemWise, unitWise, topEmployees, table };
+            return { summary, monthlyTrend, itemWise, unitWise, topEmployees, table, decisionRegister: getDecisionRegister(filters) };
         },
 
         getUnitWiseAnalytics(filters) {
@@ -160,7 +214,7 @@ module.exports = ({ db, scalar, all }) => {
 
             const table = getDetailedTable(where, params, joinReviewQueue);
 
-            return { summary, itemWise, topEmployees, table };
+            return { summary, itemWise, topEmployees, table, decisionRegister: getDecisionRegister(filters) };
         },
 
         getItemWiseAnalytics(filters) {
@@ -174,7 +228,7 @@ module.exports = ({ db, scalar, all }) => {
 
             const table = getDetailedTable(where, params, joinReviewQueue);
 
-            return { summary, unitWise, monthlyTrend, topEmployees, table };
+            return { summary, unitWise, monthlyTrend, topEmployees, table, decisionRegister: getDecisionRegister(filters) };
         },
 
         getEmployeeWiseAnalytics(filters) {
@@ -196,7 +250,7 @@ module.exports = ({ db, scalar, all }) => {
 
             const table = getDetailedTable(where, params, joinReviewQueue);
 
-            return { summary, itemWise, timeline, table };
+            return { summary, itemWise, timeline, table, decisionRegister: getDecisionRegister(filters) };
         }
     };
 };

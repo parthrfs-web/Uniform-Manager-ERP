@@ -125,6 +125,253 @@ function createDetailedTable(data) {
     `;
 }
 
+// ------------------------------------------------------------------
+// DECISION REGISTER LOGIC (Applied to all Analytics Reports)
+// ------------------------------------------------------------------
+
+function createDecisionRegisterHTML(type) {
+    const pfx = `dr_${type}`;
+    const titles = { monthly: 'MONTHLY', yearly: 'YEARLY', unit: 'UNIT', item: 'ITEM', employee: 'EMPLOYEE' };
+    const title = `${titles[type]} REVIEW DECISION REGISTER`;
+    
+    return `
+    <div class="panel flush" style="margin-top: 24px; display: flex; flex-direction: column;">
+        <div class="panel-heading" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); padding-bottom: 16px;">
+            <div>
+                <h3 style="margin: 0 0 4px 0;">${title}</h3>
+                <p style="margin: 0; color: var(--muted); font-size: 13px;">Automatic operational ledger of review decisions for this filter.</p>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button class="secondary" id="btn_export_${pfx}_pdf">Export PDF</button>
+                <button class="secondary" id="btn_export_${pfx}_excel">Export Excel</button>
+            </div>
+        </div>
+        <div class="mini-stats" style="margin: 18px 18px 0 18px; grid-template-columns: repeat(4, 1fr);" id="${pfx}_summary_cards"></div>
+        <div style="margin: 18px; display: flex; gap: 10px; background: #111821; padding: 12px; border-radius: 6px; border: 1px solid var(--line);">
+            <input type="text" id="${pfx}_search_code" placeholder="Employee Code" style="flex: 1;" />
+            <input type="text" id="${pfx}_search_name" placeholder="Employee Name" style="flex: 1;" />
+            <input type="text" id="${pfx}_search_unit" placeholder="Unit" style="flex: 1;" />
+            <input type="text" id="${pfx}_search_item" placeholder="Item" style="flex: 1;" />
+            <select id="${pfx}_search_decision" style="flex: 1;">
+                <option value="">All Decisions</option>
+                <option value="Deduct">Deduct</option>
+                <option value="Hold">Hold</option>
+                <option value="Waive">Waive</option>
+            </select>
+        </div>
+        <div class="table-wrap" style="max-height: 500px; overflow: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Payroll Month</th><th>Code</th><th>Name</th><th>Unit</th>
+                        <th>Item</th><th>Qty</th><th>Decision</th><th>Ded Amount</th>
+                        <th>Review Date</th><th>Approved By</th><th>Remarks</th><th>Current Status</th>
+                    </tr>
+                </thead>
+                <tbody id="${pfx}_table_body"></tbody>
+            </table>
+        </div>
+    </div>
+    `;
+}
+
+function updateDecisionRegister(type) {
+    const data = AnalyticsState[type]?.decisionRegister || [];
+    const pfx = `dr_${type}`;
+    const codeFilter = (document.getElementById(`${pfx}_search_code`)?.value || '').toLowerCase();
+    const nameFilter = (document.getElementById(`${pfx}_search_name`)?.value || '').toLowerCase();
+    const unitFilter = (document.getElementById(`${pfx}_search_unit`)?.value || '').toLowerCase();
+    const itemFilter = (document.getElementById(`${pfx}_search_item`)?.value || '').toLowerCase();
+    const decisionFilter = document.getElementById(`${pfx}_search_decision`)?.value || '';
+
+    const filtered = data.filter(r => {
+        if (codeFilter && !String(r.employee_code).toLowerCase().includes(codeFilter)) return false;
+        if (nameFilter && !String(r.employee_name).toLowerCase().includes(nameFilter)) return false;
+        if (unitFilter && !String(r.unit).toLowerCase().includes(unitFilter)) return false;
+        if (itemFilter && !String(r.item_name).toLowerCase().includes(itemFilter)) return false;
+        if (decisionFilter && r.decision !== decisionFilter) return false;
+        return true;
+    });
+
+    let deductCount = 0, holdCount = 0, waiveCount = 0, recoveryAmt = 0;
+    filtered.forEach(r => {
+        if (r.decision === 'Deduct') { deductCount++; recoveryAmt += Number(r.deduction_amount || 0); }
+        if (r.decision === 'Hold') holdCount++;
+        if (r.decision === 'Waive') waiveCount++;
+    });
+
+    const sumHtml = `
+        <article><span>Total Deduct Cases</span><strong class="text-red">${deductCount}</strong></article>
+        <article><span>Total Hold Cases</span><strong class="text-blue">${holdCount}</strong></article>
+        <article><span>Total Waive Cases</span><strong class="text-green">${waiveCount}</strong></article>
+        <article><span>Total Recovery Amount</span><strong class="text-red">${formatCost(recoveryAmt)}</strong></article>
+    `;
+    const summaryEl = document.getElementById(`${pfx}_summary_cards`);
+    if (summaryEl) summaryEl.innerHTML = sumHtml;
+
+    const rowsHtml = filtered.map(r => {
+        const dateStr = r.review_date ? r.review_date.split('T')[0] : '-';
+        const payrollMonth = `${monthName(r.issue_month)} ${r.issue_year}`;
+        const badge = r.decision === 'Deduct' ? 'text-red' : (r.decision === 'Waive' ? 'text-green' : 'text-blue');
+        return `
+            <tr>
+                <td>${payrollMonth}</td>
+                <td>${escapeHtml(r.employee_code)}</td>
+                <td>${escapeHtml(r.employee_name)}</td>
+                <td>${escapeHtml(r.unit)}</td>
+                <td>${escapeHtml(r.item_name)}</td>
+                <td><strong>${r.quantity}</strong></td>
+                <td class="${badge}" style="font-weight: 600;">${r.decision}</td>
+                <td class="text-red">${r.decision === 'Deduct' ? formatCost(r.deduction_amount) : '-'}</td>
+                <td>${dateStr}</td>
+                <td>${escapeHtml(r.approved_by || '-')}</td>
+                <td class="reason">${escapeHtml(r.remarks || '-')}</td>
+                <td>${escapeHtml(r.current_status)}</td>
+            </tr>
+        `;
+    }).join('') || `<tr><td colspan="12" class="empty" style="text-align: center; padding: 24px;">No review decisions match your filters.</td></tr>`;
+
+    const bodyEl = document.getElementById(`${pfx}_table_body`);
+    if (bodyEl) bodyEl.innerHTML = rowsHtml;
+
+    AnalyticsState[type].filteredDecisionRegister = filtered;
+    AnalyticsState[type].filteredDecisionRegisterStats = { deductCount, holdCount, waiveCount, recoveryAmt };
+}
+
+function bindDecisionRegisterEvents(type) {
+    const pfx = `dr_${type}`;
+    const inputs = [`${pfx}_search_code`, `${pfx}_search_name`, `${pfx}_search_unit`, `${pfx}_search_item`, `${pfx}_search_decision`];
+    
+    inputs.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener(id.includes('decision') ? 'change' : 'input', () => updateDecisionRegister(type));
+    });
+
+    document.getElementById(`btn_export_${pfx}_excel`)?.addEventListener('click', () => exportDecisionRegisterExcel(type));
+    document.getElementById(`btn_export_${pfx}_pdf`)?.addEventListener('click', () => exportDecisionRegisterPdf(type));
+
+    updateDecisionRegister(type);
+}
+
+function getReportPeriodString(type, filters) {
+    if (type === 'monthly') return `${monthName(filters.month)} ${filters.fy}`;
+    if (type === 'yearly') return `FY ${filters.fy}`;
+    if (type === 'unit') return `${filters.unit} - FY ${filters.fy}`;
+    if (type === 'item') return `${filters.item} - FY ${filters.fy}`;
+    if (type === 'employee') return `${filters.employee}${filters.fy ? ' - FY ' + filters.fy : ''}`;
+    return "ALL";
+}
+
+async function exportDecisionRegisterExcel(type) {
+    const data = AnalyticsState[type]?.filteredDecisionRegister || [];
+    if (!data.length) return toast("No data to export.");
+    
+    const filters = AnalyticsState.filters[type] || {};
+    const period = getReportPeriodString(type, filters);
+    const titles = { monthly: 'MONTHLY', yearly: 'YEARLY', unit: 'UNIT', item: 'ITEM', employee: 'EMPLOYEE' };
+
+    const headers = ["Payroll Month", "Employee Code", "Employee Name", "Unit", "Item", "Quantity", "Decision", "Deduction Amount", "Review Date", "Approved By", "Remarks", "Current Status"];
+    const rows = data.map(r => [
+        `${monthName(r.issue_month)} ${r.issue_year}`,
+        r.employee_code, r.employee_name, r.unit, r.item_name, r.quantity, r.decision,
+        r.decision === 'Deduct' ? Number(r.deduction_amount || 0) : 0,
+        r.review_date ? r.review_date.split('T')[0] : '',
+        r.approved_by || '', r.remarks || '', r.current_status || ''
+    ]);
+
+    const stats = AnalyticsState[type].filteredDecisionRegisterStats;
+
+    const config = {
+        filename: `${titles[type]}_Review_Decision_Register_${period.replace(/[^a-zA-Z0-9]/g, '_')}.xlsx`,
+        sheetName: "Decision Register",
+        reportTitle: `${titles[type]} REVIEW DECISION REGISTER - ${period.toUpperCase()}`,
+        filtersUsed: {
+            "Report Type": titles[type],
+            "Target Filter": period,
+            "Employee Code Filter": document.getElementById(`dr_${type}_search_code`)?.value || 'All',
+            "Employee Name Filter": document.getElementById(`dr_${type}_search_name`)?.value || 'All',
+            "Unit Filter": document.getElementById(`dr_${type}_search_unit`)?.value || 'All',
+            "Item Filter": document.getElementById(`dr_${type}_search_item`)?.value || 'All',
+            "Decision Filter": document.getElementById(`dr_${type}_search_decision`)?.value || 'All',
+        },
+        generatedDate: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        summary: {
+            "Total Deduct Cases": stats.deductCount,
+            "Total Hold Cases": stats.holdCount,
+            "Total Waive Cases": stats.waiveCount,
+            "Total Recovery Amount": `Rs. ${stats.recoveryAmt.toFixed(2)}`
+        },
+        headers,
+        data: rows
+    };
+
+    try {
+        startProgress();
+        const res = await window.uniformManager.exportAnalyticsExcel(config);
+        stopProgress();
+        if (!res.canceled) toast("Excel exported successfully.");
+    } catch (err) {
+        stopProgress();
+        showImportError("Export failed: " + err.message);
+    }
+}
+
+async function exportDecisionRegisterPdf(type) {
+    const data = AnalyticsState[type]?.filteredDecisionRegister || [];
+    if (!data.length) return toast("No data to export.");
+
+    const stats = AnalyticsState[type].filteredDecisionRegisterStats;
+    const filters = AnalyticsState.filters[type] || {};
+    const period = getReportPeriodString(type, filters);
+    const titles = { monthly: 'MONTHLY', yearly: 'YEARLY', unit: 'UNIT', item: 'ITEM', employee: 'EMPLOYEE' };
+    const mainTitle = `${titles[type]} REVIEW DECISION REGISTER - ${period.toUpperCase()}`;
+
+    const fit = (val, width) => {
+        const text = String(val ?? "").replace(/\s+/g, " ").trim();
+        return text.length > width ? text.slice(0, Math.max(0, width - 3)) + "..." : text.padEnd(width, " ");
+    };
+
+    const lines = [
+        "UNIFORM MANAGER",
+        mainTitle,
+        "=========================================================================================",
+        "Total Deduct Cases : " + stats.deductCount,
+        "Total Hold Cases   : " + stats.holdCount,
+        "Total Waive Cases  : " + stats.waiveCount,
+        "Total Recovery Amt : Rs. " + stats.recoveryAmt.toFixed(2),
+        "Generated          : " + new Date().toISOString().replace('T', ' ').substring(0, 19),
+        "",
+        fit("Code", 10) + " " + fit("Name", 20) + " " + fit("Item", 16) + " " + fit("Qty", 6) + " " + fit("Dec.", 8) + " " + fit("Amt", 10) + " " + fit("Unit", 15),
+        "-".repeat(88)
+    ];
+
+    data.forEach(r => {
+        const amtStr = r.decision === 'Deduct' ? Number(r.deduction_amount || 0).toFixed(2) : "-";
+        lines.push(
+            fit(r.employee_code, 10) + " " + fit(r.employee_name, 20) + " " + fit(r.item_name, 16) + " " + fit(r.quantity, 6) + " " + fit(r.decision, 8) + " " + fit(amtStr, 10) + " " + fit(r.unit, 15)
+        );
+    });
+
+    const config = {
+        filename: `${titles[type]}_Review_Decision_Register_${period.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`,
+        lines
+    };
+
+    try {
+        startProgress();
+        const res = await window.uniformManager.exportDecisionRegisterPdf(config);
+        stopProgress();
+        if (!res.canceled) toast("PDF exported successfully.");
+    } catch (err) {
+        stopProgress();
+        showImportError("Export failed: " + err.message);
+    }
+}
+
+// ------------------------------------------------------------------
+// MAIN RENDERER
+// ------------------------------------------------------------------
+
 async function renderAnalytics(reportType, containerId, data) {
     const container = document.getElementById(containerId);
     if (!data) {
@@ -169,7 +416,14 @@ async function renderAnalytics(reportType, containerId, data) {
     }
 
     html += createDetailedTable(data.table || data.timeline);
+    
+    // Automatically inject the respective Decision Register
+    html += createDecisionRegisterHTML(reportType);
+    
     container.innerHTML = html;
+
+    // Attach local filter logic for the generated register
+    bindDecisionRegisterEvents(reportType);
 }
 
 const setupAnalyticsForm = (reportType) => {
