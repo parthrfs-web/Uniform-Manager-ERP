@@ -250,10 +250,11 @@ async function createDatabase(userDataPath) {
   const SQL = await initSqlJs();
   const dbPath = path.join(userDataPath, "uniform-manager.sqlite");
   fs.mkdirSync(userDataPath, { recursive: true });
+  const isNewDatabase = !fs.existsSync(dbPath);
 
-  const db = fs.existsSync(dbPath)
-    ? new SQL.Database(fs.readFileSync(dbPath))
-    : new SQL.Database();
+  const db = isNewDatabase
+    ? new SQL.Database()
+    : new SQL.Database(fs.readFileSync(dbPath));
 
   db.run("PRAGMA foreign_keys = ON;");
 
@@ -357,7 +358,7 @@ async function createDatabase(userDataPath) {
   }
 
   syncSchema();
-  seedDefaults();
+  if (isNewDatabase) seedDefaults();
   save();
 
   function seedDefaults() {

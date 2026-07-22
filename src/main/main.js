@@ -359,6 +359,10 @@ ipcMain.handle("app:deleteDistributionRow", async (event, key) => handleSafe(asy
     return db.getState(); 
 }));
 
+ipcMain.handle("app:updateUniformIssue", (_event, issue) => handleSafe(() => { db.updateUniformIssue(issue); return db.getState(); }));
+ipcMain.handle("app:deleteUniformIssue", (_event, id) => handleSafe(() => { db.deleteUniformIssue(id); return db.getState(); }));
+ipcMain.handle("app:bulkDeleteUniformIssues", (_event, ids) => handleSafe(() => { db.bulkDeleteUniformIssues(ids); return db.getState(); }));
+
 ipcMain.handle("app:openDeductionReport", (_event, filePath) => handleSafe(async () => { if (!filePath) throw new Error("No report path provided."); const result = await shell.openPath(filePath); if (result) throw new Error(result); return true; }));
 ipcMain.handle("app:updateEmployee", (_event, employee) => handleSafe(() => { db.updateEmployee(employee); return db.getState(); }));
 ipcMain.handle("app:deleteEmployee", (_event, employeeCode) => handleSafe(() => { db.deleteEmployee(employeeCode); return db.getState(); }));
@@ -392,7 +396,6 @@ ipcMain.handle("app:exportAnalyticsExcel", async (event, config) => {
     }
 });
 
-// NEW REQUIREMENT: Bridge handler for generating the Decision Register PDF
 ipcMain.handle("app:exportDecisionRegisterPdf", async (event, config) => {
     try {
         const win = BrowserWindow.fromWebContents(event.sender);
