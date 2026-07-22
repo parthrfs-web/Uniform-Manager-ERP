@@ -303,17 +303,40 @@ ipcMain.handle("app:recalculateReviews", async (event) => handleSafe(async () =>
    return { generated, state: db.getState() };
 }));
 
-ipcMain.handle("app:generatePayrollBatch", async (_event, payload) => handleSafe(async () => {
-    const batchId = db.generatePayrollBatch(payload);
-    return { batchId, state: db.getState() };
+ipcMain.handle("app:archiveCurrentPayrollRegister", async (_event, payload) => handleSafe(async () => {
+    const archiveId = db.archiveCurrentPayrollRegister(payload);
+    return { archiveId, state: db.getState() };
 }));
 
-ipcMain.handle("app:getPayrollBatchData", async (_event, batchId) => handleSafe(async () => {
-    return db.getPayrollBatchData(batchId);
+ipcMain.handle("app:getPayrollArchiveData", async (_event, archiveId) => handleSafe(async () => {
+    return db.getPayrollArchiveData(archiveId);
 }));
 
-ipcMain.handle("app:deletePayrollArchive", async () => handleSafe(async () => {
-    const result = db.deletePayrollArchive();
+ipcMain.handle("app:renamePayrollArchive", async (_event, payload) => handleSafe(async () => {
+    db.renamePayrollArchive(payload);
+    return db.getState();
+}));
+
+ipcMain.handle("app:deletePayrollArchiveById", async (_event, archiveId) => handleSafe(async () => {
+    db.deletePayrollArchiveById(archiveId);
+    return db.getState();
+}));
+
+ipcMain.handle("app:exportPayrollArchivePdf", async (event, archiveId) => handleSafe(async () => {
+    const archive = db.getPayrollArchiveData(archiveId).archive;
+    const safeName = String(archive.payroll_month || "Payroll_Archive").replace(/[^a-z0-9_-]+/gi, "_");
+    const result = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
+        title: "Export Payroll Archive PDF",
+        defaultPath: `${safeName}.pdf`,
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    db.buildPayrollArchivePdf(archiveId, result.filePath);
+    return { canceled: false, filePath: result.filePath };
+}));
+
+ipcMain.handle("app:deleteAllPayrollArchives", async () => handleSafe(async () => {
+    const result = db.deleteAllPayrollArchives();
     return { ...result, state: db.getState() };
 }));
 

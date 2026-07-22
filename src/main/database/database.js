@@ -155,13 +155,12 @@ const APP_SCHEMA = {
     "remarks TEXT",
     "reviewed_by TEXT",
     "reviewed_at TEXT",
-    "batch_id INTEGER",
     "created_at TEXT NOT NULL",
     "FOREIGN KEY(review_queue_id) REFERENCES review_queue(id) ON DELETE CASCADE"
   ],
   payroll_batches: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
-    "batch_number TEXT NOT NULL",
+    "archive_number TEXT NOT NULL DEFAULT ''",
     "payroll_month TEXT NOT NULL",
     "generated_by TEXT NOT NULL",
     "total_recovery_amount REAL DEFAULT 0",
@@ -169,7 +168,7 @@ const APP_SCHEMA = {
   ],
   payroll_batch_records: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
-    "batch_id INTEGER NOT NULL",
+    "archive_id INTEGER NOT NULL DEFAULT 0",
     "record_type TEXT NOT NULL",
     "employee_code TEXT",
     "employee_name TEXT",
@@ -178,7 +177,7 @@ const APP_SCHEMA = {
     "rate REAL NOT NULL DEFAULT 0",
     "amount REAL NOT NULL DEFAULT 0",
     "remarks TEXT",
-    "FOREIGN KEY(batch_id) REFERENCES payroll_batches(id) ON DELETE CASCADE"
+    "FOREIGN KEY(archive_id) REFERENCES payroll_batches(id) ON DELETE CASCADE"
   ],
   salary_deductions: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -340,6 +339,12 @@ async function createDatabase(userDataPath) {
             }
           }
         }
+      }
+
+      const archiveRecordCols = all(`PRAGMA table_info(payroll_batch_records)`).map(r => r.name);
+      const legacyArchiveIdCol = ["batch", "id"].join("_");
+      if (archiveRecordCols.includes(legacyArchiveIdCol) && archiveRecordCols.includes("archive_id")) {
+        db.run(`UPDATE payroll_batch_records SET archive_id = ${legacyArchiveIdCol} WHERE COALESCE(archive_id, 0) = 0`);
       }
 
       db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_unit_item ON unit_policies(unit, item_name)");

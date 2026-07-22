@@ -26,7 +26,7 @@ function render() {
   const deductedCases = getChildStat('Deduct');
   const heldCount = getChildStat('Hold');
   const waivedCount = getChildStat('Waive');
-  const recoveredTotal = (state.payrollBatches || []).reduce((sum, b) => sum + Number(b.total_recovery_amount || 0), 0);
+  const recoveredTotal = (state.salaryDeductions || []).reduce((sum, row) => sum + Number(row.amount || 0), 0);
 
   // DOM Card Updates
   document.getElementById("dashActiveEmployees").textContent = activeEmployees;
@@ -114,8 +114,14 @@ function renderTopLists() {
 
   // 3. Top 10 Employees with highest recoveries
   const empRecoveryMap = new Map();
-  // We can't use live state.salaryDeductions easily here, query batches or simplify. Omitted detailed historical mapping for dashboard.
-  renderHtml("topEmployeesRecovery", `<tr><td colspan="2" class="empty">View recovery totals in archived reports.</td></tr>`);
+  (state.salaryDeductions || []).forEach(row => {
+    const key = `${row.employee_code} - ${row.employee_name}`;
+    empRecoveryMap.set(key, (empRecoveryMap.get(key) || 0) + Number(row.amount || 0));
+  });
+  const topRecovery = [...empRecoveryMap.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10);
+  renderHtml("topEmployeesRecovery", topRecovery.map(([employee, amount]) => `<tr><td>${escapeHtml(employee)}</td><td>${formatCompactMoney(amount)}</td></tr>`).join(""), `<tr><td colspan="2" class="empty">No live recoveries yet.</td></tr>`);
 
   // 4. Most Common Excess Items (From Pending Reviews)
   const excessItemMap = new Map();
@@ -303,7 +309,7 @@ function renderPayrollArchiveDeleteStep(step) {
     confirmButton.textContent = "Continue";
   } else if (step === 2) {
     title.textContent = "Final Warning";
-    message.textContent = "This will permanently delete every archived payroll batch, archived payroll report, archived deduction register, archived waiver register and archived hold register.\n\nHistorical payroll records will no longer be available.\n\nThis action is irreversible.";
+    message.textContent = "This will permanently delete every saved payroll register archive, including archived deduction, waiver and hold registers.\n\nHistorical payroll archive records will no longer be available.\n\nThis action is irreversible.";
     confirmButton.textContent = "I Understand";
   } else {
     title.textContent = "Type to Confirm";
@@ -319,7 +325,7 @@ function renderPayrollArchiveDeleteStep(step) {
 
 document.getElementById("deletePayrollArchiveBtn")?.addEventListener("click", () => {
   if (!desktopApi) return showImportError("Works only in Desktop App.");
-  if (!state?.payrollBatches || state.payrollBatches.length === 0) {
+  if (!state?.payrollArchives || state.payrollArchives.length === 0) {
     toast("No archived payroll reports found.");
     return;
   }
@@ -344,7 +350,7 @@ document.getElementById("confirmPayrollArchiveDeleteBtn")?.addEventListener("cli
     startProgress();
     const statusEl = document.getElementById("progressStatus");
     if (statusEl) statusEl.textContent = "Deleting payroll archive...";
-    const result = await window.uniformManager.deletePayrollArchive();
+    const result = await window.uniformManager.deleteAllPayrollArchives();
     state = result.state || await window.uniformManager.getState({ distributionLimit });
     closePayrollArchiveDeleteModal();
     if (window.resetPayrollArchiveView) window.resetPayrollArchiveView();

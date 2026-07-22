@@ -322,6 +322,7 @@ window.saveItemReviewDecision = async function(reviewId) {
             status: 'Completed'
         });
         state = await window.uniformManager.getState({ distributionLimit });
+        if (typeof renderDeductions === "function") renderDeductions();
         pendingReviewDecision.reviews = pendingReviewDecision.reviews.filter((row) => String(row.id) !== String(review.id));
         await loadReviewStage2(currentEmpData);
         if (pendingReviewDecision.reviews.length) {

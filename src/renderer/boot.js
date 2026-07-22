@@ -3,7 +3,7 @@ const views = {
   import: ["Import Excel", "Inspect workbook sheets before importing distribution data."],
   employees: ["Employees", "Search and review imported employee records."],
   issues: ["Distribution Register", "Employee-wise uniform quantity matrix."],
-  deductions: ["Reports", "Payroll deduction and waive records created from review decisions."],
+  deductions: ["Payroll Register", "Live deduction, waive and hold registers from review decisions."],
   review: ["Review Queue", "Resolve records that need office staff attention."],
   policies: ["Unit Entitlements", "Set allowed uniform quantity for each unit/company and item."],
   reset: ["Data Management", "Backup, restore, or securely reset application data."],
@@ -22,6 +22,9 @@ function setView(name) {
   document.querySelectorAll(".nav-button").forEach((el) => el.classList.toggle("active", el.dataset.view === name));
   document.getElementById("viewTitle").textContent = views[name][0];
   document.getElementById("viewSubtitle").textContent = views[name][1];
+  if (name === "deductions" && state && typeof renderDeductions === "function") {
+    renderDeductions();
+  }
 }
 
 async function loadState() {
