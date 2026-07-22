@@ -164,52 +164,40 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
                         
                         const totalAllowed = totalIssued - totalExcess;
                         
-                        let rq = all("SELECT * FROM review_queue WHERE employee_code = ? AND lower(item_name) = ?", [empCode, itemKey])[0];
-                        let rqId;
-                        
-                        const pKey = `${String(latestUnit).toLowerCase()}|${itemKey}`;
-                        const reason = policyMap.has(pKey) 
-                            ? `${itemName} entitlement exceeded.` 
-                            : `No entitlement policy found for ${latestUnit || "Unknown Unit"} / ${itemName}.`;
-                        const estimatedAmount = totalExcess * maxCost;
-                        
-                        if (!rq) {
-                            if (totalExcess > 0) {
-                                db.run(`INSERT INTO review_queue (employee_code, employee_name, unit, item_name, issued_qty, allowed_qty, excess_qty, item_cost, estimated_amount, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)`,
-                                [empCode, itemIssues[0].employee_name, latestUnit, itemName, totalIssued, totalAllowed, totalExcess, maxCost, estimatedAmount, reason, now()]);
-                                rqId = scalar("SELECT last_insert_rowid()");
-                                generatedCount++;
-                            } else {
-                                continue; 
-                            }
-                        } else {
-                            rqId = rq.id;
-                        }
-                        
-                        const legacyItems = all("SELECT * FROM review_queue_items WHERE review_queue_id = ? AND decision != 'Pending'", [rqId]);
-                        const legacyMap = new Map(legacyItems.map(li => [li.uniform_issue_id, li]));
-                        
-                        db.run("DELETE FROM review_queue_items WHERE review_queue_id = ?", [rqId]);
-                        
-                        let hasPending = false;
-                        
                         for (const ext of excessTransactions) {
-                            const legacy = legacyMap.get(ext.issue.id);
-                            const decision = legacy ? legacy.decision : 'Pending';
-                            const remarks = legacy ? legacy.remarks : '';
-                            const reviewedBy = legacy ? legacy.reviewed_by : null;
-                            const reviewedAt = legacy ? legacy.reviewed_at : null;
-                            
-                            if (decision === 'Pending') hasPending = true;
-                            
-                            db.run(`INSERT INTO review_queue_items (review_queue_id, uniform_issue_id, employee_code, item_name, issue_date, quantity, decision, remarks, reviewed_by, reviewed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                            [rqId, ext.issue.id, empCode, itemName, ext.issue.issued_at, ext.excess_qty, decision, remarks, reviewedBy, reviewedAt, now()]);
+                            const unit = ext.issue.unit || "";
+                            const pKey = `${String(unit).toLowerCase()}|${itemKey}`;
+                            const itemCost = costMap.get(pKey) || 0;
+                            const reason = policyMap.has(pKey)
+                                ? `${itemName} entitlement exceeded.`
+                                : `No entitlement policy found for ${unit || "Unknown Unit"} / ${itemName}.`;
+                            const existingPieceReviews = all(`
+                                SELECT rq.*
+                                FROM review_queue rq
+                                JOIN review_queue_items rqi ON rqi.review_queue_id = rq.id
+                                WHERE rqi.uniform_issue_id = ?
+                                  AND rq.employee_code = ?
+                                  AND lower(rq.item_name) = ?
+                                  AND rqi.quantity = 1
+                                ORDER BY rq.id ASC
+                            `, [ext.issue.id, empCode, itemKey]);
+
+                            let remaining = Number(ext.excess_qty || 0);
+                            let pieceIndex = 0;
+                            while (remaining > 0) {
+                                const pieceQuantity = Math.min(1, remaining);
+                                if (!existingPieceReviews[pieceIndex]) {
+                                    db.run(`INSERT INTO review_queue (employee_code, employee_name, unit, item_name, issued_qty, allowed_qty, excess_qty, item_cost, estimated_amount, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)`,
+                                    [empCode, ext.issue.employee_name, unit, itemName, pieceQuantity, 0, pieceQuantity, itemCost, pieceQuantity * itemCost, reason, now()]);
+                                    const rqId = scalar("SELECT last_insert_rowid()");
+                                    db.run(`INSERT INTO review_queue_items (review_queue_id, uniform_issue_id, employee_code, item_name, issue_date, quantity, decision, remarks, reviewed_by, reviewed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, 'Pending', '', NULL, NULL, ?)`,
+                                    [rqId, ext.issue.id, empCode, itemName, ext.issue.issued_at, pieceQuantity, now()]);
+                                    generatedCount++;
+                                }
+                                remaining -= pieceQuantity;
+                                pieceIndex++;
+                            }
                         }
-                        
-                        let newStatus = hasPending ? 'Pending' : 'Completed';
-                        if (totalExcess === 0) newStatus = 'Completed'; 
-                        
-                        db.run("UPDATE review_queue SET issued_qty = ?, allowed_qty = ?, excess_qty = ?, item_cost = ?, estimated_amount = ?, reason = ?, status = ? WHERE id = ?", [totalIssued, totalAllowed, totalExcess, maxCost, estimatedAmount, reason, newStatus, rqId]);
                     }
                 }
                 db.run("COMMIT");

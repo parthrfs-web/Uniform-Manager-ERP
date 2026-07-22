@@ -355,6 +355,34 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
     throw new Error("Text date value 01-Apr-25 in MONTH column did not import as Apr 2025.");
   }
 
+  const historicalPeriodPath = path.join(tmp, "historical-periods.xlsx");
+  const historicalPeriodWorkbook = XLSX.utils.book_new();
+  const historicalPeriodRows = [
+    ["FY 2024-25"],
+    ["Emp Code", "Name", "Father Name", "Unit", "Godown", "MONTH", "Issue Date", "Shirt"],
+    ["HP001", "Historical Serial", "Father Serial", "Reliance", "A", "", 36175, 1],
+    ["HP002", "Historical Text", "Father Text", "Reliance", "A", "", "15-06-1998", 1],
+    ["HP003", "Fiscal January", "Father Jan", "Reliance", "A", 1, "", 1],
+    ["HP004", "Fiscal April", "Father Apr", "Reliance", "A", 4, "", 1],
+  ];
+  XLSX.utils.book_append_sheet(historicalPeriodWorkbook, XLSX.utils.aoa_to_sheet(historicalPeriodRows), "Distribution");
+  XLSX.writeFile(historicalPeriodWorkbook, historicalPeriodPath);
+  const historicalPeriodDb = await createDatabase(fs.mkdtempSync(path.join(os.tmpdir(), "uniform-manager-historical-periods-")));
+  importWorkbook(historicalPeriodPath, historicalPeriodDb);
+  const historicalRows = historicalPeriodDb.getState({ distributionLimit: 1000 }).uniformIssueMatrix.rows;
+  if (!historicalRows.some((row) => row.employee_code === "HP001" && row.issue_month === 1 && row.issue_year === 1999)) {
+    throw new Error("Historical Excel serial issue date did not import as Jan 1999.");
+  }
+  if (!historicalRows.some((row) => row.employee_code === "HP002" && row.issue_month === 6 && row.issue_year === 1998)) {
+    throw new Error("Historical typed issue date did not import as Jun 1998.");
+  }
+  if (!historicalRows.some((row) => row.employee_code === "HP003" && row.issue_month === 1 && row.issue_year === 2025)) {
+    throw new Error("Fiscal-year fallback did not map Jan to the FY end year.");
+  }
+  if (!historicalRows.some((row) => row.employee_code === "HP004" && row.issue_month === 4 && row.issue_year === 2024)) {
+    throw new Error("Fiscal-year fallback did not map Apr to the FY start year.");
+  }
+
   const shiftWorkbookPath = path.join(tmp, "unit-shift-policy.xlsx");
   const shiftWorkbook = XLSX.utils.book_new();
   const shiftRows = [

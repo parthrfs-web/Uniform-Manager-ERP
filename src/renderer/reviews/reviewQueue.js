@@ -208,9 +208,126 @@ window.closeIndividualReviewModal = function() {
     document.getElementById("individualReviewModal").classList.remove("show");
 };
 
+window.openItemReviewModal = function(...reviewIds) {
+    const reviews = (currentStage2Items || []).filter((review) => reviewIds.map(String).includes(String(review.id)) && review.status === 'Pending');
+    if (!reviews.length) return;
+
+    pendingReviewDecision = { reviews };
+    const firstReview = reviews[0];
+    const issuedQty = reviews.reduce((sum, review) => sum + Number(review.issued_qty || 0), 0);
+    const allowedQty = reviews.some((review) => review.allowed_qty === null) ? 'No Policy' : reviews.reduce((sum, review) => sum + Number(review.allowed_qty || 0), 0);
+    const excessQty = reviews.reduce((sum, review) => sum + Number(review.excess_qty || 0), 0);
+
+    document.getElementById("indRevTitle").textContent = "Review Excess Transactions";
+    document.getElementById("indRevSubtitle").textContent = `${firstReview.employee_code} - ${firstReview.employee_name} | ${firstReview.item_name}`;
+    document.getElementById("indRevSummary").innerHTML = `
+        <article style="background: var(--panel); padding: 14px; border: 1px solid var(--line); border-radius: 6px;"><span style="color: var(--muted); font-size: 12px;">Total Issued</span><strong style="display: block; font-size: 20px; margin-top: 4px;">${issuedQty}</strong></article>
+        <article style="background: var(--panel); padding: 14px; border: 1px solid var(--line); border-radius: 6px;"><span style="color: var(--muted); font-size: 12px;">Total Allowed</span><strong style="display: block; font-size: 20px; margin-top: 4px;">${allowedQty}</strong></article>
+        <article style="background: var(--panel); padding: 14px; border: 1px solid var(--line); border-radius: 6px;"><span style="color: var(--muted); font-size: 12px;">Total Excess</span><strong class="text-amber" style="display: block; font-size: 20px; margin-top: 4px;">${excessQty}</strong></article>
+    `;
+    document.getElementById("indRevHistoryRows").innerHTML = `<tr><td colspan="5" style="padding: 10px; border: 1px solid var(--line); color: var(--muted); text-align: center;">Pending Reviews: ${reviews.length}</td></tr>`;
+    document.getElementById("indRevTransactions").innerHTML = reviews.map((review, index) => {
+        const child = (review.child_items || [])[0];
+        if (!child) return '';
+        return `
+            <div class="panel flush" style="margin-bottom: 16px;">
+                <div style="padding: 16px; border-bottom: 1px solid var(--line); background: #131922;"><span style="font-weight: bold; font-size: 14px; color: var(--ink);">Review ${index + 1}</span></div>
+                <div style="padding: 16px; border-top: 1px solid var(--line); background: #0f141b;">
+                    <div style="margin-bottom: 14px; display: flex; align-items: center; flex-wrap: wrap; font-size: 14px; font-weight: 600;">
+                        <span style="color: var(--muted); margin-right: 16px;">Decision:</span>
+                        <label style="margin-right: 16px; cursor: pointer;"><input type="radio" name="group_action_${review.id}" value="Deduct" onchange="updateGroupedReviewSummary()"> <span class="text-red">Deduct</span></label>
+                        <label style="margin-right: 16px; cursor: pointer;"><input type="radio" name="group_action_${review.id}" value="Waive" onchange="updateGroupedReviewSummary()"> <span class="text-green">Waive</span></label>
+                        <label style="cursor: pointer;"><input type="radio" name="group_action_${review.id}" value="Hold" onchange="updateGroupedReviewSummary()"> <span class="text-blue">Hold</span></label>
+                    </div>
+                    <input type="text" id="group_remarks_${review.id}" placeholder="Optional justification" style="width: 100%; box-sizing: border-box; padding: 8px 12px; font-size: 13px; background: #111821; color: #fff; border: 1px solid var(--line); border-radius: 4px;">
+                    <div style="margin-top: 12px;">
+                        <button type="button" class="primary" onclick="saveItemReviewDecision(${review.id})">Save</button>
+                        <span id="group_save_msg_${review.id}" style="margin-left: 10px; color: var(--muted); font-size: 13px;"></span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    document.getElementById("indRevGeneralReason").value = firstReview.reason || '';
+    document.getElementById("indRevGeneralReason").disabled = false;
+    document.getElementById("indRevApprovedBy").disabled = false;
+    document.getElementById("indRevSaveBtn").style.display = 'none';
+    document.getElementById("indRevSaveMsg").textContent = "";
+    window.updateGroupedReviewSummary();
+    document.getElementById("individualReviewModal").classList.add("show");
+};
+
+window.updateGroupedReviewSummary = function() {
+    const reviews = pendingReviewDecision?.reviews || [];
+    let deductQty = 0;
+    let waiveQty = 0;
+    let holdQty = 0;
+    let recoveryAmount = 0;
+
+    reviews.forEach((review) => {
+        const action = Array.from(document.getElementsByName(`group_action_${review.id}`)).find((radio) => radio.checked)?.value || 'Pending';
+        const quantity = Number((review.child_items || [])[0]?.quantity || review.excess_qty || 0);
+        if (action === 'Deduct') {
+            deductQty += quantity;
+            recoveryAmount += quantity * Number(review.live_rate !== undefined ? review.live_rate : (review.item_cost || 0));
+        } else if (action === 'Waive') waiveQty += quantity;
+        else if (action === 'Hold') holdQty += quantity;
+    });
+
+    document.getElementById("indRevCalculatedTotals").innerHTML = `<div><span style="color: var(--muted); margin-right: 8px;">Total Deduct Qty:</span> <strong class="text-red">${deductQty}</strong></div><div><span style="color: var(--muted); margin-right: 8px;">Total Waive Qty:</span> <strong class="text-green">${waiveQty}</strong></div><div><span style="color: var(--muted); margin-right: 8px;">Total Hold Qty:</span> <strong class="text-blue">${holdQty}</strong></div><div><span style="color: var(--muted); margin-right: 8px;">Total Recovery Amount:</span> <strong class="text-red">â‚¹${recoveryAmount.toFixed(2)}</strong></div>`;
+    const decided = deductQty + waiveQty + holdQty;
+    document.getElementById("indRevSaveMsg").textContent = decided === 0 ? "Select a decision for a review below." : "";
+};
+
+window.saveItemReviewDecision = async function(reviewId) {
+    if (!desktopApi || !pendingReviewDecision?.reviews) return;
+    const review = pendingReviewDecision.reviews.find((row) => String(row.id) === String(reviewId));
+    const child = (review?.child_items || [])[0];
+    if (!review || !child) return;
+
+    const action = Array.from(document.getElementsByName(`group_action_${review.id}`)).find((radio) => radio.checked)?.value || 'Pending';
+    if (action === 'Pending') {
+        const msg = document.getElementById(`group_save_msg_${review.id}`);
+        if (msg) msg.textContent = "Select Deduct, Waive, or Hold.";
+        return;
+    }
+
+    try {
+        await window.uniformManager.updateReview({
+            id: review.id,
+            approved_by: document.getElementById("indRevApprovedBy").value,
+            reason: document.getElementById("indRevGeneralReason").value,
+            issue_decisions: [{
+                id: child.id,
+                decision: action,
+                remarks: document.getElementById(`group_remarks_${review.id}`)?.value || '',
+                quantity: child.quantity
+            }],
+            status: 'Completed'
+        });
+        state = await window.uniformManager.getState({ distributionLimit });
+        pendingReviewDecision.reviews = pendingReviewDecision.reviews.filter((row) => String(row.id) !== String(review.id));
+        await loadReviewStage2(currentEmpData);
+        if (pendingReviewDecision.reviews.length) {
+            openItemReviewModal(...pendingReviewDecision.reviews.map((row) => row.id));
+        } else {
+            closeIndividualReviewModal();
+        }
+        toast("Review decision saved.");
+    } catch (error) {
+        showImportError(error.message || "Review decision failed.");
+    }
+};
+
 document.getElementById("individualReviewForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!desktopApi || !pendingReviewDecision || !pendingReviewDecision.review) return;
+    if (!desktopApi || !pendingReviewDecision) return;
+
+    if (Array.isArray(pendingReviewDecision.reviews)) {
+        return;
+    }
+
+    if (!pendingReviewDecision.review) return;
     
     const review = pendingReviewDecision.review;
     
@@ -289,7 +406,47 @@ async function loadReviewStage2(emp) {
     let amounts = { Pending: 0, Deducted: 0, Waived: 0, Held: 0, Completed: 0 };
     let grandTotal = 0;
 
-    document.getElementById("reviewStage2Cards").innerHTML = currentStage2Items.map(row => {
+    const reviewRows = currentStage2Items;
+    reviewRows.forEach((row) => {
+      const status = row.status || "Pending";
+      const rate = Number(row.live_rate !== undefined ? row.live_rate : (row.item_cost || 0));
+      const amount = Number(row.sum_deduct || 0) * rate;
+      if (counts[status] !== undefined) counts[status]++;
+      if (amounts[status] !== undefined) amounts[status] += amount;
+      grandTotal += amount;
+    });
+
+    const itemGroups = new Map();
+    reviewRows.forEach((row) => {
+      const key = String(row.item_name || "").trim().toLowerCase();
+      if (!itemGroups.has(key)) itemGroups.set(key, []);
+      itemGroups.get(key).push(row);
+    });
+
+    const groupedReviewItems = Array.from(itemGroups.values()).map((rows) => {
+      const firstRow = rows[0];
+      const pendingRows = rows.filter((row) => (row.status || "Pending") === "Pending");
+      const reviewAmount = rows.reduce((sum, row) => {
+        const rate = Number(row.live_rate !== undefined ? row.live_rate : (row.item_cost || 0));
+        return sum + (Number(row.sum_deduct || 0) * rate);
+      }, 0);
+
+      return {
+        ...firstRow,
+        status: pendingRows.length ? "Pending" : (firstRow.status || "Completed"),
+        issued_qty: rows.reduce((sum, row) => sum + Number(row.issued_qty || 0), 0),
+        allowed_qty: rows.some((row) => row.allowed_qty === null) ? null : rows.reduce((sum, row) => sum + Number(row.allowed_qty || 0), 0),
+        excess_qty: rows.reduce((sum, row) => sum + Number(row.excess_qty || 0), 0),
+        sum_deduct: rows.reduce((sum, row) => sum + Number(row.sum_deduct || 0), 0),
+        sum_waive: rows.reduce((sum, row) => sum + Number(row.sum_waive || 0), 0),
+        sum_hold: rows.reduce((sum, row) => sum + Number(row.sum_hold || 0), 0),
+        units: Array.from(new Set(rows.map((row) => String(row.unit || "").trim()).filter(Boolean))).join(", "),
+        reviewRows: rows,
+        reviewAmount,
+      };
+    });
+
+    document.getElementById("reviewStage2Cards").innerHTML = groupedReviewItems.map(row => {
       const status = row.status || 'Pending';
       const rate = Number(row.live_rate !== undefined ? row.live_rate : (row.item_cost || 0));
       
@@ -303,21 +460,13 @@ async function loadReviewStage2(emp) {
       const initialWaiveQty = Number(row.sum_waive || 0);
       const initialHoldQty = Number(row.sum_hold || 0);
       
-      const amount = initialDeductQty * rate;
+      const amount = row.reviewAmount;
       
-      if (counts[status] !== undefined) counts[status]++;
-      if (amounts[status] !== undefined) amounts[status] += amount;
-      grandTotal += amount;
-      
-      let actionsHtml = '';
-      if (status === 'Pending') {
-          actionsHtml = `<button type="button" class="primary" onclick="openIndividualReviewModal(${row.id})" style="width: 100%;">Review</button>`;
-      } else {
-          actionsHtml = `
-              <button type="button" class="secondary" onclick="openIndividualReviewModal(${row.id})">View Review</button>
-              <button type="button" class="secondary" data-review="${row.id}" data-status="Pending">Revert</button>
-          `;
-      }
+      const pendingReviewCount = row.reviewRows.filter((review) => (review.status || 'Pending') === 'Pending').length;
+      const reviewIds = row.reviewRows.map((review) => review.id).join(', ');
+      const actionsHtml = pendingReviewCount
+        ? `<button type="button" class="primary" onclick="openItemReviewModal(${reviewIds})" style="width: 100%;">Review</button>`
+        : '';
 
       return `
         <div class="panel review-card" style="margin: 0; padding: 18px; border-left: 4px solid ${borderColor}; display: flex; flex-direction: column;">
@@ -326,8 +475,7 @@ async function loadReviewStage2(emp) {
           </h4>
           <div style="font-size: 13px; line-height: 1.8; flex-grow: 1;">
             <div><span style="color: var(--muted);">Employee:</span> <strong>${escapeHtml(row.employee_name)}</strong> <span style="color: var(--muted);">(${escapeHtml(row.employee_code)})</span></div>
-            <div><span style="color: var(--muted);">Unit:</span> ${escapeHtml(row.unit)}</div>
-            
+            <div><span style="color: var(--muted);">Unit:</span> ${escapeHtml(row.units)}</div>
             <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 16px 0; padding: 16px 0; border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line); background: #111821; border-radius: 6px;">
               <div style="text-align: center;"><small style="color:var(--muted); display:block; line-height: 1.2; text-transform: uppercase; font-size: 11px; margin-bottom: 4px;">Issued</small><strong style="font-size: 16px;">${Number(row.issued_qty || 0)}</strong></div>
               <div style="text-align: center; border-left: 1px solid var(--line); border-right: 1px solid var(--line);"><small style="color:var(--muted); display:block; line-height: 1.2; text-transform: uppercase; font-size: 11px; margin-bottom: 4px;">Allowed</small><strong style="font-size: 16px;">${row.allowed_qty !== null ? Number(row.allowed_qty) : 'No Policy'}</strong></div>
@@ -346,8 +494,9 @@ async function loadReviewStage2(emp) {
             </div>
           </div>
           
-          <div style="margin-top: 20px; border-top: 1px solid var(--line); padding-top: 16px; display: flex; justify-content: space-between; align-items: center; gap: 12px;">
-             ${actionsHtml}
+          <div style="margin-top: 20px; border-top: 1px solid var(--line); padding-top: 16px;">
+             <strong style="display: block; margin-bottom: 10px;">Pending Reviews: ${pendingReviewCount}</strong>
+              ${actionsHtml}
           </div>
         </div>
       `;

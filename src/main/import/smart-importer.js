@@ -114,16 +114,33 @@ function monthName(month) {
 function excelSerialToDate(serial) {
   if (typeof serial !== "number" || !Number.isFinite(serial) || serial < 1000) return null;
   const date = new Date(Math.round((serial - 25569) * 86400 * 1000));
-  if (date.getFullYear() < 2000 || date.getFullYear() > 2100) return null;
+  if (date.getFullYear() < 1900 || date.getFullYear() > 2100) return null;
   return date;
 }
 
 function normalizeYear(yearText) {
-  const year = Number(yearText);
+  const text = String(yearText || "").trim();
+  const year = Number(text);
   if (!Number.isFinite(year)) return null;
-  if (year >= 2000 && year <= 2100) return year;
-  if (year >= 0 && year <= 99) return 2000 + year;
+  if (year >= 1900 && year <= 2100) return year;
+  if (/^\d{1,2}$/.test(text)) return year <= 29 ? 2000 + year : 1900 + year;
   return null;
+}
+
+function fiscalYearEnd(start, endText) {
+  if (!start || endText === null || endText === undefined) return null;
+  const text = String(endText);
+  let end = text.length === 2 ? Number(`${String(start).slice(0, 2)}${text}`) : Number(text);
+  if (text.length === 2 && end < start) end += 100;
+  return Number.isFinite(end) ? end : null;
+}
+
+function yearFromFallbackMonth(month, fallback) {
+  if (!month) return fallback.issue_year || null;
+  const fiscalStart = fallback.fiscal_start_year || null;
+  const fiscalEnd = fallback.fiscal_end_year || null;
+  if (fiscalStart && fiscalEnd) return month >= 4 ? fiscalStart : fiscalEnd;
+  return fallback.issue_year || null;
 }
 
 function parseIssuePeriod(value, fallback = {}) {
@@ -135,7 +152,7 @@ function parseIssuePeriod(value, fallback = {}) {
 
   if (typeof value === "number") {
     if (Number.isInteger(value) && value >= 1 && value <= 12) {
-      const year = fallback.issue_year || null;
+      const year = yearFromFallbackMonth(value, fallback);
       return { issue_month: value, issue_year: year, issue_period_label: `${monthName(value)}${year ? ` ${year}` : ""}` };
     }
     const date = excelSerialToDate(value);
@@ -154,11 +171,11 @@ function parseIssuePeriod(value, fallback = {}) {
   const numericMonth = clean.match(/^(0?[1-9]|1[0-2])$/);
   if (numericMonth) {
     const month = Number(numericMonth[1]);
-    const year = fallback.issue_year || null;
+    const year = yearFromFallbackMonth(month, fallback);
     return { issue_month: month, issue_year: year, issue_period_label: `${monthName(month)}${year ? ` ${year}` : ""}` };
   }
   
-  const numericDate = clean.match(/\b(?:(\d{1,2})-(\d{1,2})-(20\d{2}|\d{2})|(20\d{2})-(\d{1,2})-(\d{1,2}))\b/);
+  const numericDate = clean.match(/\b(?:(\d{1,2})-(\d{1,2})-(19\d{2}|20\d{2}|\d{2})|((?:19|20)\d{2})-(\d{1,2})-(\d{1,2}))\b/);
   if (numericDate) {
     const month = Number(numericDate[2] || numericDate[5]);
     const year = normalizeYear(numericDate[3] || numericDate[4]);
@@ -167,13 +184,15 @@ function parseIssuePeriod(value, fallback = {}) {
     }
   }
   
-  const fiscal = lower.match(/\b(20\d{2})\s*[-–]\s*(\d{2}|20\d{2})\b/);
+  const fiscal = lower.match(/\b(19\d{2}|20\d{2})\s*[-\u2013\u2014]\s*(\d{2}|19\d{2}|20\d{2})\b/);
   const found = [];
   const monthRegex = /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b[\s-]*(\d{2,4})?/gi;
   let match;
   while ((match = monthRegex.exec(clean))) {
     const month = MONTH_NAMES[match[1].toLowerCase()];
-    const year = normalizeYear(match[2]) || fallback.issue_year || (fiscal ? Number(fiscal[1]) : null);
+    const fiscalStart = fiscal ? Number(fiscal[1]) : fallback.fiscal_start_year || null;
+    const fiscalEnd = fiscal ? fiscalYearEnd(fiscalStart, fiscal[2]) : fallback.fiscal_end_year || null;
+    const year = normalizeYear(match[2]) || yearFromFallbackMonth(month, { ...fallback, fiscal_start_year: fiscalStart, fiscal_end_year: fiscalEnd });
     if (month) found.push({ month, year });
   }
   
@@ -185,8 +204,8 @@ function parseIssuePeriod(value, fallback = {}) {
   
   if (fiscal) {
     const start = Number(fiscal[1]);
-    const end = typeof fiscal[2] === "string" && fiscal[2].length === 2 ? `20${fiscal[2]}` : fiscal[2];
-    return { issue_month: null, issue_year: start, issue_period_label: `${start}-${end}` };
+    const end = fiscalYearEnd(start, fiscal[2]);
+    return { issue_month: null, issue_year: start, fiscal_start_year: start, fiscal_end_year: end, issue_period_label: `${start}-${end}` };
   }
   return { ...fallback, issue_period_label: text };
 }
@@ -393,8 +412,8 @@ function parseSheet(sheet, sheetName) {
     const rawDate = colMap.dateIdx !== -1 ? row[colMap.dateIdx] : "";
     
     if (rawMonth || rawDate) {
-      const monthPeriod = parseIssuePeriod(rawMonth, currentSectionPeriod);
-      const datePeriod = parseIssuePeriod(rawDate, currentSectionPeriod);
+      const monthPeriod = rawMonth ? parseIssuePeriod(rawMonth, currentSectionPeriod) : {};
+      const datePeriod = rawDate ? parseIssuePeriod(rawDate, currentSectionPeriod) : {};
       issuePeriod = monthPeriod.issue_period_label ? monthPeriod : datePeriod;
     }
     if (!issuePeriod.issue_period_label) issuePeriod = currentSectionPeriod;
@@ -410,7 +429,7 @@ function parseSheet(sheet, sheetName) {
       }
     });
 
-    const rowHash = crypto.createHash('sha256').update(`${internalId}|${issuePeriod.issue_period_label}|${JSON.stringify(itemEntries)}`).digest('hex');
+    const rowHash = crypto.createHash('sha256').update(`${internalId}|${issuePeriod.issue_period_label}|${primaryUnit}|${godown}|${JSON.stringify(itemEntries)}`).digest('hex');
     if (duplicateRowSet.has(rowHash)) {
         warnings.push(`Duplicate row skipped for employee ${rawCodeText} at row ${rowIdx + 1}`);
         skipped++;
