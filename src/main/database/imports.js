@@ -187,8 +187,8 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
                             while (remaining > 0) {
                                 const pieceQuantity = Math.min(1, remaining);
                                 if (!existingPieceReviews[pieceIndex]) {
-                                    db.run(`INSERT INTO review_queue (employee_code, employee_name, unit, item_name, issued_qty, allowed_qty, excess_qty, item_cost, estimated_amount, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)`,
-                                    [empCode, ext.issue.employee_name, unit, itemName, pieceQuantity, 0, pieceQuantity, itemCost, pieceQuantity * itemCost, reason, now()]);
+                                    db.run(`INSERT INTO review_queue (employee_code, employee_name, unit, item_name, issue_month, issue_year, issue_period_label, issued_qty, allowed_qty, excess_qty, item_cost, estimated_amount, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)`,
+[empCode, ext.issue.employee_name, unit, itemName, ext.issue.issue_month, ext.issue.issue_year, ext.issue.issue_period_label, pieceQuantity, 0, pieceQuantity, itemCost, pieceQuantity * itemCost, reason, now()]);
                                     const rqId = scalar("SELECT last_insert_rowid()");
                                     db.run(`INSERT INTO review_queue_items (review_queue_id, uniform_issue_id, employee_code, item_name, issue_date, quantity, decision, remarks, reviewed_by, reviewed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, 'Pending', '', NULL, NULL, ?)`,
                                     [rqId, ext.issue.id, empCode, itemName, ext.issue.issued_at, pieceQuantity, now()]);

@@ -225,7 +225,23 @@ window.openItemReviewModal = function(...reviewIds) {
         <article style="background: var(--panel); padding: 14px; border: 1px solid var(--line); border-radius: 6px;"><span style="color: var(--muted); font-size: 12px;">Total Allowed</span><strong style="display: block; font-size: 20px; margin-top: 4px;">${allowedQty}</strong></article>
         <article style="background: var(--panel); padding: 14px; border: 1px solid var(--line); border-radius: 6px;"><span style="color: var(--muted); font-size: 12px;">Total Excess</span><strong class="text-amber" style="display: block; font-size: 20px; margin-top: 4px;">${excessQty}</strong></article>
     `;
-    document.getElementById("indRevHistoryRows").innerHTML = `<tr><td colspan="5" style="padding: 10px; border: 1px solid var(--line); color: var(--muted); text-align: center;">Pending Reviews: ${reviews.length}</td></tr>`;
+    
+    const monthNames = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const historyHtml = (firstReview.history_items || []).map(hist => {
+        const monthStr = hist.issue_month ? monthNames[Number(hist.issue_month)] : '-';
+        return `
+            <tr style="background: #111821;">
+                <td style="padding: 10px; border: 1px solid var(--line);">${hist.issue_date ? hist.issue_date.split('T')[0] : '-'}</td>
+                <td style="padding: 10px; border: 1px solid var(--line);"><strong>${Number(hist.quantity)}</strong></td>
+                <td style="padding: 10px; border: 1px solid var(--line);">${escapeHtml(hist.unit || '-')}</td>
+                <td style="padding: 10px; border: 1px solid var(--line);">${hist.issue_year || '-'} ${monthStr}</td>
+                <td style="padding: 10px; border: 1px solid var(--line); color: var(--muted);">${escapeHtml(hist.remarks || '-')}</td>
+            </tr>
+        `;
+    }).join('');
+    
+    document.getElementById("indRevHistoryRows").innerHTML = historyHtml || '<tr><td colspan="5" style="padding: 10px; border: 1px solid var(--line); color: var(--muted); text-align: center;">No history found for the previous two years.</td></tr>';
+
     document.getElementById("indRevTransactions").innerHTML = reviews.map((review, index) => {
         const child = (review.child_items || [])[0];
         if (!child) return '';
@@ -274,7 +290,7 @@ window.updateGroupedReviewSummary = function() {
         else if (action === 'Hold') holdQty += quantity;
     });
 
-    document.getElementById("indRevCalculatedTotals").innerHTML = `<div><span style="color: var(--muted); margin-right: 8px;">Total Deduct Qty:</span> <strong class="text-red">${deductQty}</strong></div><div><span style="color: var(--muted); margin-right: 8px;">Total Waive Qty:</span> <strong class="text-green">${waiveQty}</strong></div><div><span style="color: var(--muted); margin-right: 8px;">Total Hold Qty:</span> <strong class="text-blue">${holdQty}</strong></div><div><span style="color: var(--muted); margin-right: 8px;">Total Recovery Amount:</span> <strong class="text-red">â‚¹${recoveryAmount.toFixed(2)}</strong></div>`;
+    document.getElementById("indRevCalculatedTotals").innerHTML = `<div><span style="color: var(--muted); margin-right: 8px;">Total Deduct Qty:</span> <strong class="text-red">${deductQty}</strong></div><div><span style="color: var(--muted); margin-right: 8px;">Total Waive Qty:</span> <strong class="text-green">${waiveQty}</strong></div><div><span style="color: var(--muted); margin-right: 8px;">Total Hold Qty:</span> <strong class="text-blue">${holdQty}</strong></div><div><span style="color: var(--muted); margin-right: 8px;">Total Recovery Amount:</span> <strong class="text-red">₹${recoveryAmount.toFixed(2)}</strong></div>`;
     const decided = deductQty + waiveQty + holdQty;
     document.getElementById("indRevSaveMsg").textContent = decided === 0 ? "Select a decision for a review below." : "";
 };
