@@ -44,6 +44,65 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
   if (genericEmployee.unit !== "Main Store") throw new Error("Unit Name was not used as Unit / Company.");
   if (genericEmployee.godown !== "Reliance") throw new Error("Godown Name was not kept as Godown.");
 
+  const placeholderWorkbookPath = path.join(tmp, "placeholder-employees.xlsx");
+  const placeholderWorkbook = XLSX.utils.book_new();
+  const placeholderRows = [
+    ["Employee Code", "Employee Name", "Father Name", "Unit", "Godown", "Month", "Shirt"],
+    ["NEW", "Rahul Kumar", "Mohan Lal", "Reliance", "A", "Apr 2025", 1],
+    ["NEW", "Suresh Kumar", "Ramesh Lal", "Reliance", "A", "Apr 2025", 1],
+    ["LEFT", "Mohan Das", "Ravi Das", "AMNS", "B", "Apr 2025", 1],
+    ["", "Blank Code", "Blank Father", "AMNS", "B", "Apr 2025", 1],
+    ["9001", "Numeric Code", "Numeric Father", "Reliance", "A", "Apr 2025", 1],
+  ];
+  XLSX.utils.book_append_sheet(placeholderWorkbook, XLSX.utils.aoa_to_sheet(placeholderRows), "Distribution");
+  XLSX.writeFile(placeholderWorkbook, placeholderWorkbookPath);
+  const placeholderDb = await createDatabase(fs.mkdtempSync(path.join(os.tmpdir(), "uniform-manager-placeholder-")));
+  importWorkbook(placeholderWorkbookPath, placeholderDb);
+  const placeholderState = placeholderDb.getState({ distributionLimit: 1000 });
+  const placeholderEmployees = placeholderState.employees.filter((row) => ["Rahul Kumar", "Suresh Kumar", "Mohan Das", "Blank Code"].includes(row.employee_name));
+  if (placeholderEmployees.length !== 4) throw new Error("Placeholder employees were merged or skipped.");
+  const generatedCodes = placeholderEmployees.map((row) => row.employee_code);
+  if (new Set(generatedCodes).size !== 4) throw new Error("Different placeholder employees did not receive unique generated codes.");
+  if (generatedCodes.some((code) => ["NEW", "LEFT", "LIFT", ""].includes(String(code).trim().toUpperCase()))) {
+    throw new Error("Placeholder value was saved as a permanent employee code.");
+  }
+  if (!placeholderState.employees.some((row) => row.employee_code === "9001" && row.employee_name === "Numeric Code")) {
+    throw new Error("Existing numeric employee code was not preserved.");
+  }
+  const rahulCode = placeholderEmployees.find((row) => row.employee_name === "Rahul Kumar").employee_code;
+  const sureshCode = placeholderEmployees.find((row) => row.employee_name === "Suresh Kumar").employee_code;
+  if (!placeholderState.uniformIssueMatrix.rows.some((row) => row.employee_code === rahulCode && row.employee_name === "Rahul Kumar")) {
+    throw new Error("Distribution history did not link to Rahul's generated employee code.");
+  }
+  if (!placeholderState.uniformIssueMatrix.rows.some((row) => row.employee_code === sureshCode && row.employee_name === "Suresh Kumar")) {
+    throw new Error("Distribution history did not link to Suresh's generated employee code.");
+  }
+  placeholderDb.resetOperationalData();
+
+  const placeholderReuseDb = await createDatabase(fs.mkdtempSync(path.join(os.tmpdir(), "uniform-manager-placeholder-reuse-")));
+  const firstPlaceholderImportPath = path.join(tmp, "placeholder-reuse-first.xlsx");
+  const secondPlaceholderImportPath = path.join(tmp, "placeholder-reuse-second.xlsx");
+  const firstPlaceholderWorkbook = XLSX.utils.book_new();
+  const secondPlaceholderWorkbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(firstPlaceholderWorkbook, XLSX.utils.aoa_to_sheet([
+    ["Employee Code", "Employee Name", "Father Name", "Unit", "Godown", "Month", "Shirt"],
+    ["NEW", "Reuse Person", "Reuse Father", "Reliance", "A", "Apr 2025", 1],
+  ]), "Distribution");
+  XLSX.utils.book_append_sheet(secondPlaceholderWorkbook, XLSX.utils.aoa_to_sheet([
+    ["Employee Code", "Employee Name", "Father Name", "Unit", "Godown", "Month", "Pant"],
+    ["NEW", "Reuse   Person", "Reuse Father", "Reliance", "A", "May 2025", 1],
+  ]), "Distribution");
+  XLSX.writeFile(firstPlaceholderWorkbook, firstPlaceholderImportPath);
+  XLSX.writeFile(secondPlaceholderWorkbook, secondPlaceholderImportPath);
+  importWorkbook(firstPlaceholderImportPath, placeholderReuseDb);
+  const reuseCode = placeholderReuseDb.getState().employees.find((row) => row.employee_name === "Reuse Person").employee_code;
+  importWorkbook(secondPlaceholderImportPath, placeholderReuseDb);
+  const reuseState = placeholderReuseDb.getState({ distributionLimit: 1000 });
+  const reuseRows = reuseState.uniformIssueMatrix.rows.filter((row) => row.employee_code === reuseCode);
+  if (reuseState.employees.filter((row) => row.employee_code === reuseCode).length !== 1 || reuseRows.length !== 2) {
+    throw new Error("Future placeholder import did not reuse the generated employee code.");
+  }
+
   const policyWorkbookPath = path.join(tmp, "missing-policy-recalc.xlsx");
   const policyWorkbook = XLSX.utils.book_new();
   const policySheet = XLSX.utils.aoa_to_sheet([

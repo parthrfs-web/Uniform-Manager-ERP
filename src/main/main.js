@@ -5,6 +5,7 @@ const { fork } = require("child_process");
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { createDatabase } = require("./database/database");
 const { exportToExcel, exportAnalyticsExcel } = require('./services/export-engine');
+const { buildValidatedImport } = require("./import/smart-importer");
 
 let db;
 let pendingImportCache = null; 
@@ -93,73 +94,17 @@ ipcMain.handle("app:previewImportSelectedSheet", (_event, request) => handleSafe
   parsed.summary = parsed.summary || { totalRows: 0 };
   parsed.worksheetRows = Array.isArray(parsed.worksheetRows) ? parsed.worksheetRows : [];
 
-  const validationErrors = [];
-  const validIssues = [];
-  const validEmployees = [];
-  const generatedReviews = [];
+  const allEmployees = db.getState().employees || [];
+  const validated = buildValidatedImport(parsed, allEmployees);
   
-  let totalWorksheetRows = parsed.worksheetRows.length;
-  let validWorksheetRows = 0;
-  let invalidWorksheetRows = 0;
-  let duplicateWorksheetRows = 0;
-  let generatedIssuesCount = 0;
-
-  for (const row of parsed.worksheetRows) {
-    let error = null;
-    
-    if (!row.employee_code) error = "Employee Code missing";
-    else if (!row.employee_name) error = "Employee Name missing";
-
-    if (error) {
-      validationErrors.push({ row: row.source_row || "-", employee_code: row.employee_code || "-", employee_name: row.employee_name || "-", reason: error });
-      invalidWorksheetRows++;
-      continue;
-    }
-
-    let allItemsDuplicate = true;
-    let rowIssues = [];
-    const items = Array.isArray(row.items) ? row.items : [];
-
-    for (const item of items) {
-      const issue = {
-        employee_code: row.employee_code, employee_name: row.employee_name,
-        unit: row.unit, godown: row.godown, item_name: item.itemName, quantity: item.quantity,
-        issue_month: row.issue_month, issue_year: row.issue_year, issue_period_label: row.issue_period_label,
-        source_sheet: parsed.summary.selectedSheet, source_row: row.source_row
-      };
-      allItemsDuplicate = false;
-      rowIssues.push(issue);
-    }
-
-    if (items.length > 0 && allItemsDuplicate) {
-      duplicateWorksheetRows++;
-      validationErrors.push({ row: row.source_row || "-", employee_code: row.employee_code, employee_name: row.employee_name, reason: "Duplicate Distribution" });
-    } else {
-      validWorksheetRows++;
-      validEmployees.push({
-        employee_code: row.employee_code, employee_name: row.employee_name, father_name: row.father_name,
-        unit: row.unit, godown: row.godown, mobile_number: row.mobile_number, designation: row.designation, status: "Active"
-      });
-      if (!row.unit) {
-        generatedReviews.push({ employee_code: row.employee_code, employee_name: row.employee_name, unit: "", reason: "Unit Missing" });
-      }
-      for (const issue of rowIssues) validIssues.push(issue);
-      generatedIssuesCount += rowIssues.length;
-    }
-  }
-
-  parsed.summary.totalWorksheetRows = totalWorksheetRows;
-  parsed.summary.validWorksheetRows = validWorksheetRows;
-  parsed.summary.invalidWorksheetRows = invalidWorksheetRows;
-  parsed.summary.duplicateWorksheetRows = duplicateWorksheetRows;
-  parsed.summary.generatedIssues = generatedIssuesCount;
+  parsed.summary = { ...parsed.summary, ...validated.stats };
 
   pendingImportCache = {
       summary: parsed.summary,
-      validEmployees,
-      validIssues,
-      validationErrors,
-      reviews: generatedReviews,
+      validEmployees: validated.validEmployees,
+      validIssues: validated.validIssues,
+      validationErrors: validated.validationErrors,
+      reviews: validated.reviews,
       durationMs: Date.now() - start
   };
 
@@ -167,7 +112,7 @@ ipcMain.handle("app:previewImportSelectedSheet", (_event, request) => handleSafe
       canceled: false, 
       preview: { 
           summary: parsed.summary, 
-          validationErrors: validationErrors 
+          validationErrors: validated.validationErrors 
       } 
   };
 }));
@@ -182,6 +127,11 @@ ipcMain.handle("app:commitImport", async (event) => {
 
       if (!safeData) {
         throw new Error("Session expired or cache lost. Please select and preview the Excel sheet again.");
+      }
+
+      if (safeData.validationErrors.some(e => e.reason.includes("CRITICAL AUDIT FAILURE"))) {
+        pendingImportCache = null;
+        throw new Error(safeData.validationErrors.find(e => e.reason.includes("CRITICAL AUDIT FAILURE")).reason);
       }
 
       event.sender.send("import-progress", { progress: 2, status: "Checking for duplicate imports..." });
@@ -409,7 +359,6 @@ ipcMain.handle("app:exportExcel", async (event, config) => {
     }
 });
 
-// NEW IPC: Export Analytics Excel
 ipcMain.handle("app:exportAnalyticsExcel", async (event, config) => {
     try {
         const win = BrowserWindow.fromWebContents(event.sender);
@@ -420,7 +369,6 @@ ipcMain.handle("app:exportAnalyticsExcel", async (event, config) => {
     }
 });
 
-// NEW IPC: Analytics Data Retrievals
 ipcMain.handle("app:getAnalyticsData", async (_event, request) => handleSafe(() => {
     const { reportType, filters } = request;
     if (reportType === 'monthly') return db.getMonthlyAnalytics(filters);

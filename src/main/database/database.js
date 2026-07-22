@@ -9,7 +9,7 @@ const createPolicies = require("./policies");
 const createInventory = require("./inventory");
 const createReports = require("./reports");
 const createAudit = require("./audit");
-const createAnalytics = require("./analytics"); // NEW
+const createAnalytics = require("./analytics");
 
 const ignoredIssueItemSignals = [
   "month", "year", "date", "sr no", "serial", "reg no", "register", "total qty", "total quantity",
@@ -29,7 +29,8 @@ function isIgnoredIssueItemName(value) {
   if (!label) return true;
   return ignoredIssueItemSignals.some((signal) => {
     const cleanSignal = normalizeLabel(signal);
-    return label === cleanSignal || label.includes(cleanSignal) || cleanSignal.includes(label);
+    if (!cleanSignal) return false;
+    return label === cleanSignal || label.startsWith(`${cleanSignal} `) || label.endsWith(` ${cleanSignal}`) || label.includes(` ${cleanSignal} `);
   });
 }
 
@@ -43,7 +44,9 @@ function classifyReviewReason(reason) {
 
 const APP_SCHEMA = {
   employees: [
-    "employee_code TEXT PRIMARY KEY",
+    "id INTEGER PRIMARY KEY AUTOINCREMENT",
+    "employee_code TEXT NOT NULL",
+    "imported_employee_code TEXT",
     "employee_name TEXT NOT NULL",
     "father_name TEXT",
     "unit TEXT",
@@ -306,6 +309,14 @@ async function createDatabase(userDataPath) {
   function syncSchema() {
     db.run("BEGIN TRANSACTION");
     try {
+      const empCols = all(`PRAGMA table_info(employees)`).map(r => r.name);
+      if (empCols.includes("employee_code") && !empCols.includes("id")) {
+          db.run("ALTER TABLE employees RENAME TO _employees_old");
+          db.run(`CREATE TABLE employees (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_code TEXT NOT NULL, imported_employee_code TEXT, employee_name TEXT NOT NULL, father_name TEXT, unit TEXT, godown TEXT, mobile_number TEXT, designation TEXT, status TEXT DEFAULT 'Active', created_at TEXT, updated_at TEXT)`);
+          db.run(`INSERT INTO employees (employee_code, imported_employee_code, employee_name, father_name, unit, godown, mobile_number, designation, status, created_at, updated_at) SELECT employee_code, '', employee_name, father_name, unit, godown, mobile_number, designation, status, created_at, updated_at FROM _employees_old`);
+          db.run("DROP TABLE _employees_old");
+      }
+
       for (const [tableName, columns] of Object.entries(APP_SCHEMA)) {
         const colDefs = columns.join(", ");
         db.run(`CREATE TABLE IF NOT EXISTS ${tableName} (${colDefs})`);
@@ -618,7 +629,7 @@ async function createDatabase(userDataPath) {
   const inventoryModule = createInventory(moduleContext);
   const reportModule = createReports(moduleContext);
   const auditModule = createAudit(moduleContext);
-  const analyticsModule = createAnalytics(moduleContext); // NEW
+  const analyticsModule = createAnalytics(moduleContext);
 
   return {
     dbPath,
@@ -631,7 +642,7 @@ async function createDatabase(userDataPath) {
     ...inventoryModule,
     ...reportModule,
     ...auditModule,
-    ...analyticsModule, // NEW
+    ...analyticsModule,
   };
 }
 
