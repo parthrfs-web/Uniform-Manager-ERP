@@ -6,6 +6,7 @@
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --win --dir",
+    "build": "electron-builder --dir",
     "dist": "electron-builder --win",
     "test": "node scripts/smoke-test.js",
     "check-import": "node scripts/check-import.js"
@@ -14,7 +15,7 @@
     "uniform",
     "desktop"
   ],
-  "author": "",
+  "author": "Pravisht",
   "license": "ISC",
   "build": {
     "appId": "com.uniformmanager.desktop",
@@ -28,15 +29,19 @@
       "package.json"
     ],
     "win": {
-      "target": "nsis"
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico"
     }
   },
   "devDependencies": {
     "electron": "^43.0.0",
-    "electron-builder": "^26.15.3",
-    "xlsx": "^0.18.5"
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
-    "sql.js": "^1.14.1"
+    "sql.js": "^1.14.1",
+    "xlsx": "^0.18.5"
   }
 }
