@@ -1,5 +1,74 @@
 module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, extractAmount, generateDeductionPdf }) => ({
-    // ... keep existing bulkUpsertEmployees ...
+    
+    bulkUpsertEmployees(employees) {
+        if (!employees || !employees.length) return { inserted: 0, updated: 0 };
+        let inserted = 0;
+        let updated = 0;
+        const timestamp = now();
+        
+        db.run("BEGIN TRANSACTION");
+        const insertStmt = db.prepare(
+            `INSERT INTO employees (
+                employee_code, imported_employee_code, employee_name, father_name, 
+                unit, godown, mobile_number, designation, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        const updateStmt = db.prepare(
+            `UPDATE employees SET 
+                imported_employee_code=?, employee_name=?, father_name=?, unit=?, 
+                godown=?, mobile_number=?, designation=?, status=?, updated_at=? 
+            WHERE employee_code=?`
+        );
+        
+        try {
+            employees.forEach(emp => {
+                const existing = scalar("SELECT id FROM employees WHERE employee_code = ?", [emp.employee_code]);
+                if (existing) {
+                    updateStmt.run([
+                        emp.imported_employee_code || "",
+                        emp.employee_name || "",
+                        emp.father_name || "",
+                        emp.unit || "",
+                        emp.godown || "",
+                        emp.mobile_number || "",
+                        emp.designation || "",
+                        emp.status || "Active",
+                        timestamp,
+                        emp.employee_code
+                    ]);
+                    updated += 1;
+                } else {
+                    insertStmt.run([
+                        emp.employee_code || "",
+                        emp.imported_employee_code || "",
+                        emp.employee_name || "",
+                        emp.father_name || "",
+                        emp.unit || "",
+                        emp.godown || "",
+                        emp.mobile_number || "",
+                        emp.designation || "",
+                        emp.status || "Active",
+                        timestamp,
+                        timestamp
+                    ]);
+                    inserted += 1;
+                }
+            });
+            db.run("COMMIT");
+        } catch (error) {
+            db.run("ROLLBACK");
+            throw error;
+        } finally {
+            insertStmt.free();
+            updateStmt.free();
+        }
+        
+        if (inserted > 0 || updated > 0) {
+            save();
+        }
+        
+        return { inserted, updated };
+    },
 
     updateEmployee(employee) {
       const oldCode = employee.original_employee_code || employee.employee_code;
@@ -50,5 +119,32 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       save();
     },
 
-    // ... keep existing deleteEmployee ...
+    deleteEmployee(employeeCode) {
+        const existing = all("SELECT * FROM employees WHERE employee_code = ?", [employeeCode])[0];
+        if (!existing) throw new Error(`Employee ${employeeCode} was not found.`);
+        
+        db.run("BEGIN TRANSACTION");
+        try {
+            db.run("DELETE FROM employees WHERE employee_code = ?", [employeeCode]);
+            db.run("DELETE FROM uniform_issues WHERE employee_code = ?", [employeeCode]);
+            db.run("DELETE FROM review_queue WHERE employee_code = ?", [employeeCode]);
+            db.run("DELETE FROM review_queue_items WHERE employee_code = ?", [employeeCode]);
+            db.run("DELETE FROM payroll_batch_records WHERE employee_code = ?", [employeeCode]);
+            db.run("DELETE FROM salary_deductions WHERE employee_code = ?", [employeeCode]);
+            db.run("DELETE FROM waive_records WHERE employee_code = ?", [employeeCode]);
+            db.run("DELETE FROM review_decisions WHERE employee_code = ?", [employeeCode]);
+            db.run("DELETE FROM recovery_records WHERE employee_code = ?", [employeeCode]);
+            db.run("COMMIT");
+        } catch (err) {
+            db.run("ROLLBACK");
+            throw err;
+        }
+
+        audit("Employee Deleted", `${existing.employee_code} - ${existing.employee_name}`, {
+            entityType: "Employee",
+            entityId: employeeCode,
+            oldValue: existing,
+        });
+        save();
+    }
 });
