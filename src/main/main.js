@@ -342,6 +342,7 @@ ipcMain.handle("app:deleteAllPayrollArchives", async () => handleSafe(async () =
 
 ipcMain.handle("app:upsertPolicy", (_event, policy) => handleSafe(() => { db.upsertPolicy(policy); return db.getState(); }));
 ipcMain.handle("app:deletePolicy", (_event, policyId) => handleSafe(() => { db.deletePolicy(policyId); return db.getState(); }));
+ipcMain.handle("app:bulkUpdatePolicy", (_event, payload) => handleSafe(() => { const result = db.bulkUpdatePolicy(payload); return { ...result, state: db.getState() }; }));
 ipcMain.handle("app:upsertItem", (_event, item) => handleSafe(() => { db.upsertItem(item); return db.getState(); }));
 ipcMain.handle("app:deleteItem", (_event, itemId) => handleSafe(() => { db.deleteItem(itemId); return db.getState(); }));
 ipcMain.handle("app:updateReview", (_event, action) => handleSafe(() => { db.updateReview(action); return db.getState(); }));

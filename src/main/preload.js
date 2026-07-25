@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("uniformManager", {
   getReviewQueueStage3: (req) => safeInvoke("app:getReviewQueueStage3", req),
   upsertPolicy: (policy) => safeInvoke("app:upsertPolicy", policy),
   deletePolicy: (policyId) => safeInvoke("app:deletePolicy", policyId),
+  bulkUpdatePolicy: (payload) => safeInvoke("app:bulkUpdatePolicy", payload),
   recalculateReviews: () => safeInvoke("app:recalculateReviews"),
   archiveCurrentPayrollRegister: (payload) => safeInvoke("app:archiveCurrentPayrollRegister", payload),
   getPayrollArchiveData: (archiveId) => safeInvoke("app:getPayrollArchiveData", archiveId),

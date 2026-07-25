@@ -158,6 +158,7 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
           COALESCE(rq.unit, e.unit, '') AS unit,
           rqi.item_name,
           rqi.quantity,
+          rq.issue_month,
           rq.issue_year,
           rqi.reviewed_at,
           COALESCE(rqi.remarks, rq.remarks, '') AS remarks
@@ -177,6 +178,7 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
           COALESCE(e.employee_name, rq.employee_name, rqi.employee_code) AS employee_name,
           COALESCE(rq.unit, e.unit, '') AS unit,
           rqi.item_name,
+          rq.issue_month,
           rq.issue_year,
           c.old_decision,
           c.new_decision,

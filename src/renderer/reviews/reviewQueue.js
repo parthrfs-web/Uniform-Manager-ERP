@@ -657,12 +657,27 @@ document.addEventListener("click", async (event) => {
 let corrEmpSearch = "";
 let corrUnitSearch = "";
 let corrItemSearch = "";
+let corrFySearch = "";
+let corrMonthSearch = "";
+let corrDecisionSearch = "";
+
+let histEmpSearch = "";
+let histUnitSearch = "";
+let histItemSearch = "";
+let histFySearch = "";
+let histMonthSearch = "";
+let histDecisionSearch = "";
+
+const monthNames = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 window.renderCorrectionCentre = function() {
     const records = (state.correctionCentreRecords || []).filter(r => {
         if (corrEmpSearch && !String(r.employee_code).toLowerCase().includes(corrEmpSearch) && !String(r.employee_name).toLowerCase().includes(corrEmpSearch)) return false;
         if (corrUnitSearch && !String(r.unit).toLowerCase().includes(corrUnitSearch)) return false;
         if (corrItemSearch && !String(r.item_name).toLowerCase().includes(corrItemSearch)) return false;
+        if (corrFySearch && String(r.issue_year || "") !== corrFySearch) return false;
+        if (corrMonthSearch && String(r.issue_month || "") !== corrMonthSearch) return false;
+        if (corrDecisionSearch && String(r.record_type || "") !== corrDecisionSearch) return false;
         return true;
     });
 
@@ -672,6 +687,7 @@ window.renderCorrectionCentre = function() {
             <td>${text(r.employee_name)}</td>
             <td>${text(r.unit)}</td>
             <td>${text(r.item_name)}</td>
+            <td>${r.issue_month ? monthNames[Number(r.issue_month)] : '-'}</td>
             <td>${text(r.issue_year || '-')}</td>
             <td><span class="badge ${r.record_type}">${text(r.record_type)}</span></td>
             <td>${r.reviewed_at ? r.reviewed_at.split('T')[0] : '-'}</td>
@@ -682,7 +698,7 @@ window.renderCorrectionCentre = function() {
                 </div>
             </td>
         </tr>
-    `).join('') || `<tr><td colspan="9" class="empty">No correctable decisions found.</td></tr>`;
+    `).join('') || `<tr><td colspan="10" class="empty">No correctable decisions found.</td></tr>`;
 
     const tbody = document.getElementById("correctionRows");
     if (tbody) tbody.innerHTML = html;
@@ -690,9 +706,14 @@ window.renderCorrectionCentre = function() {
 
 window.renderCorrectionHistory = function() {
     const records = (state.correctionHistory || []).filter(r => {
-        if (corrEmpSearch && !String(r.employee_code).toLowerCase().includes(corrEmpSearch) && !String(r.employee_name).toLowerCase().includes(corrEmpSearch)) return false;
-        if (corrUnitSearch && !String(r.unit).toLowerCase().includes(corrUnitSearch)) return false;
-        if (corrItemSearch && !String(r.item_name).toLowerCase().includes(corrItemSearch)) return false;
+        if (histEmpSearch && !String(r.employee_code).toLowerCase().includes(histEmpSearch) && !String(r.employee_name).toLowerCase().includes(histEmpSearch)) return false;
+        if (histUnitSearch && !String(r.unit).toLowerCase().includes(histUnitSearch)) return false;
+        if (histItemSearch && !String(r.item_name).toLowerCase().includes(histItemSearch)) return false;
+        if (histFySearch && String(r.issue_year || "") !== histFySearch) return false;
+        if (histMonthSearch && String(r.issue_month || "") !== histMonthSearch) return false;
+        
+        if (histDecisionSearch && String(r.new_decision || "") !== histDecisionSearch && String(r.old_decision || "") !== histDecisionSearch) return false;
+        
         return true;
     });
 
@@ -707,6 +728,7 @@ window.renderCorrectionHistory = function() {
             <td>${text(r.employee_name)}</td>
             <td>${text(r.unit)}</td>
             <td>${text(r.item_name)}</td>
+            <td>${r.issue_month ? monthNames[Number(r.issue_month)] : '-'}</td>
             <td>${text(r.issue_year || '-')}</td>
             <td><span class="badge ${r.old_decision}">${text(r.old_decision)}</span></td>
             <td><span class="badge ${r.new_decision}">${text(r.new_decision)}</span></td>
@@ -714,25 +736,54 @@ window.renderCorrectionHistory = function() {
             <td>${dateStr}</td>
             <td>${timeStr}</td>
         </tr>
-    `}).join('') || `<tr><td colspan="10" class="empty">No corrections have been made yet.</td></tr>`;
+    `}).join('') || `<tr><td colspan="11" class="empty">No corrections have been made yet.</td></tr>`;
 
     const tbody = document.getElementById("correctionHistoryRows");
     if (tbody) tbody.innerHTML = html;
 };
 
 document.addEventListener("input", (e) => {
-    if (e.target.id === "correction_search_emp") { corrEmpSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); window.renderCorrectionHistory(); }
-    if (e.target.id === "correction_search_unit") { corrUnitSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); window.renderCorrectionHistory(); }
-    if (e.target.id === "correction_search_item") { corrItemSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); window.renderCorrectionHistory(); }
+    if (e.target.id === "correction_search_emp") { corrEmpSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); }
+    else if (e.target.id === "correction_search_unit") { corrUnitSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); }
+    else if (e.target.id === "correction_search_item") { corrItemSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); }
+    else if (e.target.id === "correction_search_fy") { corrFySearch = e.target.value.trim(); window.renderCorrectionCentre(); }
+    
+    else if (e.target.id === "history_search_emp") { histEmpSearch = e.target.value.toLowerCase(); window.renderCorrectionHistory(); }
+    else if (e.target.id === "history_search_unit") { histUnitSearch = e.target.value.toLowerCase(); window.renderCorrectionHistory(); }
+    else if (e.target.id === "history_search_item") { histItemSearch = e.target.value.toLowerCase(); window.renderCorrectionHistory(); }
+    else if (e.target.id === "history_search_fy") { histFySearch = e.target.value.trim(); window.renderCorrectionHistory(); }
 });
 
 document.addEventListener("change", (e) => {
-    if (e.target.id === "correction_search_emp") { corrEmpSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); window.renderCorrectionHistory(); }
-    if (e.target.id === "correction_search_unit") { corrUnitSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); window.renderCorrectionHistory(); }
-    if (e.target.id === "correction_search_item") { corrItemSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); window.renderCorrectionHistory(); }
+    if (e.target.id === "correction_search_emp") { corrEmpSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); }
+    else if (e.target.id === "correction_search_unit") { corrUnitSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); }
+    else if (e.target.id === "correction_search_item") { corrItemSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); }
+    else if (e.target.id === "correction_search_fy") { corrFySearch = e.target.value.trim(); window.renderCorrectionCentre(); }
+    else if (e.target.id === "correction_search_month") { corrMonthSearch = e.target.value; window.renderCorrectionCentre(); }
+    else if (e.target.id === "correction_search_decision") { corrDecisionSearch = e.target.value; window.renderCorrectionCentre(); }
+
+    else if (e.target.id === "history_search_emp") { histEmpSearch = e.target.value.toLowerCase(); window.renderCorrectionHistory(); }
+    else if (e.target.id === "history_search_unit") { histUnitSearch = e.target.value.toLowerCase(); window.renderCorrectionHistory(); }
+    else if (e.target.id === "history_search_item") { histItemSearch = e.target.value.toLowerCase(); window.renderCorrectionHistory(); }
+    else if (e.target.id === "history_search_fy") { histFySearch = e.target.value.trim(); window.renderCorrectionHistory(); }
+    else if (e.target.id === "history_search_month") { histMonthSearch = e.target.value; window.renderCorrectionHistory(); }
+    else if (e.target.id === "history_search_decision") { histDecisionSearch = e.target.value; window.renderCorrectionHistory(); }
 });
 
 document.addEventListener("click", (e) => {
+    if (e.target.id === "correction_clear_filters") {
+        const ids = ["correction_search_emp", "correction_search_unit", "correction_search_item", "correction_search_fy", "correction_search_month", "correction_search_decision"];
+        ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+        corrEmpSearch = corrUnitSearch = corrItemSearch = corrFySearch = corrMonthSearch = corrDecisionSearch = "";
+        if (typeof window.renderCorrectionCentre === "function") window.renderCorrectionCentre();
+    }
+    else if (e.target.id === "history_clear_filters") {
+        const ids = ["history_search_emp", "history_search_unit", "history_search_item", "history_search_fy", "history_search_month", "history_search_decision"];
+        ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+        histEmpSearch = histUnitSearch = histItemSearch = histFySearch = histMonthSearch = histDecisionSearch = "";
+        if (typeof window.renderCorrectionHistory === "function") window.renderCorrectionHistory();
+    }
+
     const btn = e.target.closest("[data-correct-item]");
     if (btn) {
         const itemId = btn.dataset.correctItem;

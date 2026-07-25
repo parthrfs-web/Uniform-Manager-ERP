@@ -58,5 +58,68 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         oldValue: existing,
       });
       save();
+    },
+    bulkUpdatePolicy(payload) {
+      const { item_name, update_price, new_price, update_qty, new_qty, units } = payload;
+      
+      if (!item_name || !units || !Array.isArray(units)) {
+        throw new Error("Invalid bulk update parameters.");
+      }
+      if (!update_price && !update_qty) {
+        throw new Error("No update options selected.");
+      }
+
+      let updated = 0;
+      let skipped = 0;
+      let failed = 0;
+      const skippedDetails = [];
+
+      for (const unit of units) {
+        try {
+          const existing = all(
+            "SELECT id FROM unit_policies WHERE lower(unit) = lower(?) AND lower(item_name) = lower(?)",
+            [unit, item_name]
+          )[0];
+
+          if (existing) {
+            let updates = [];
+            let params = [];
+            
+            if (update_price) {
+              updates.push("item_cost = ?");
+              params.push(Number(new_price || 0));
+            }
+            if (update_qty) {
+              updates.push("yearly_entitlement = ?");
+              params.push(Number(new_qty || 0));
+            }
+            
+            if (updates.length > 0) {
+              params.push(existing.id);
+              db.run(`UPDATE unit_policies SET ${updates.join(", ")} WHERE id = ?`, params);
+              updated++;
+            }
+          } else {
+            skipped++;
+            skippedDetails.push({ unit, reason: "Item not configured in policy." });
+          }
+        } catch (error) {
+          failed++;
+        }
+      }
+
+      if (updated > 0) {
+        const changes = [];
+        if (update_price) changes.push(`Price -> ₹${new_price}`);
+        if (update_qty) changes.push(`Qty -> ${new_qty}`);
+        
+        audit("Bulk Item Update", `Updated ${changes.join(" and ")} for ${item_name} across ${updated} units.`, {
+            entityType: "Policy",
+            remarks: `Skipped: ${skipped}, Failed: ${failed}`
+        });
+        save();
+      }
+
+      return { updated, skipped, failed, skippedDetails };
     }
 });
