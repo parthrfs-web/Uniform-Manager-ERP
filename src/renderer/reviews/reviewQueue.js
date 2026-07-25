@@ -13,11 +13,17 @@ async function renderReviewStage1() {
   if (toolbar && !searchInput) {
     searchInput = document.createElement("input");
     searchInput.id = "reviewSearchInput";
-    searchInput.placeholder = "Search by Code, Name, Unit";
+    searchInput.setAttribute("data-smart-picker", "employees");
+    searchInput.setAttribute("autocomplete", "off");
+    searchInput.placeholder = "Search by Code or Name";
     toolbar.appendChild(searchInput);
   }
   if (searchInput && !searchInput.dataset.bound) {
     searchInput.addEventListener("input", (e) => {
+      reviewSearchText = e.target.value.toLowerCase();
+      renderReviewStage1Rows(summaryCache);
+    });
+    searchInput.addEventListener("change", (e) => {
       reviewSearchText = e.target.value.toLowerCase();
       renderReviewStage1Rows(summaryCache);
     });
@@ -35,7 +41,7 @@ async function renderReviewStage1() {
 function renderReviewStage1Rows(summaryList) {
   const filtered = summaryList.filter(emp => {
     if (!reviewSearchText) return true;
-    const searchStr = `${text(emp.employee_code)} ${text(emp.employee_name)} ${text(emp.current_unit)}`.toLowerCase();
+    const searchStr = `${text(emp.employee_code)} ${text(emp.employee_name)}`.toLowerCase();
     return searchStr.includes(reviewSearchText);
   });
 
@@ -395,11 +401,6 @@ document.getElementById("individualReviewForm")?.addEventListener("submit", asyn
     }
 });
 
-
-// ---------------------------------------------------------
-// COMPACT SUMMARY CARDS LOGIC
-// ---------------------------------------------------------
-
 async function loadReviewStage2(emp) {
   selectedReviewEmployee = emp.employee_code;
   currentEmpData = emp;
@@ -647,4 +648,132 @@ document.addEventListener("click", async (event) => {
     }
     return;
   }
+});
+
+// ---------------------------------------------------------
+// CORRECTION CENTRE & CORRECTION HISTORY LOGIC
+// ---------------------------------------------------------
+
+let corrEmpSearch = "";
+let corrUnitSearch = "";
+let corrItemSearch = "";
+
+window.renderCorrectionCentre = function() {
+    const records = (state.correctionCentreRecords || []).filter(r => {
+        if (corrEmpSearch && !String(r.employee_code).toLowerCase().includes(corrEmpSearch) && !String(r.employee_name).toLowerCase().includes(corrEmpSearch)) return false;
+        if (corrUnitSearch && !String(r.unit).toLowerCase().includes(corrUnitSearch)) return false;
+        if (corrItemSearch && !String(r.item_name).toLowerCase().includes(corrItemSearch)) return false;
+        return true;
+    });
+
+    const html = records.map(r => `
+        <tr>
+            <td>${text(r.employee_code)}</td>
+            <td>${text(r.employee_name)}</td>
+            <td>${text(r.unit)}</td>
+            <td>${text(r.item_name)}</td>
+            <td>${text(r.issue_year || '-')}</td>
+            <td><span class="badge ${r.record_type}">${text(r.record_type)}</span></td>
+            <td>${r.reviewed_at ? r.reviewed_at.split('T')[0] : '-'}</td>
+            <td class="reason">${text(r.remarks)}</td>
+            <td>
+                <div class="row-actions">
+                    <button class="primary" data-correct-item="${r.id}">Correct</button>
+                </div>
+            </td>
+        </tr>
+    `).join('') || `<tr><td colspan="9" class="empty">No correctable decisions found.</td></tr>`;
+
+    const tbody = document.getElementById("correctionRows");
+    if (tbody) tbody.innerHTML = html;
+};
+
+window.renderCorrectionHistory = function() {
+    const records = (state.correctionHistory || []).filter(r => {
+        if (corrEmpSearch && !String(r.employee_code).toLowerCase().includes(corrEmpSearch) && !String(r.employee_name).toLowerCase().includes(corrEmpSearch)) return false;
+        if (corrUnitSearch && !String(r.unit).toLowerCase().includes(corrUnitSearch)) return false;
+        if (corrItemSearch && !String(r.item_name).toLowerCase().includes(corrItemSearch)) return false;
+        return true;
+    });
+
+    const html = records.map(r => {
+        const dateObj = r.created_at ? new Date(r.created_at) : null;
+        const dateStr = dateObj ? dateObj.toISOString().split('T')[0] : '-';
+        const timeStr = dateObj ? dateObj.toLocaleTimeString() : '-';
+
+        return `
+        <tr>
+            <td>${text(r.employee_code)}</td>
+            <td>${text(r.employee_name)}</td>
+            <td>${text(r.unit)}</td>
+            <td>${text(r.item_name)}</td>
+            <td>${text(r.issue_year || '-')}</td>
+            <td><span class="badge ${r.old_decision}">${text(r.old_decision)}</span></td>
+            <td><span class="badge ${r.new_decision}">${text(r.new_decision)}</span></td>
+            <td class="reason">${text(r.reason)}</td>
+            <td>${dateStr}</td>
+            <td>${timeStr}</td>
+        </tr>
+    `}).join('') || `<tr><td colspan="10" class="empty">No corrections have been made yet.</td></tr>`;
+
+    const tbody = document.getElementById("correctionHistoryRows");
+    if (tbody) tbody.innerHTML = html;
+};
+
+document.addEventListener("input", (e) => {
+    if (e.target.id === "correction_search_emp") { corrEmpSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); window.renderCorrectionHistory(); }
+    if (e.target.id === "correction_search_unit") { corrUnitSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); window.renderCorrectionHistory(); }
+    if (e.target.id === "correction_search_item") { corrItemSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); window.renderCorrectionHistory(); }
+});
+
+document.addEventListener("change", (e) => {
+    if (e.target.id === "correction_search_emp") { corrEmpSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); window.renderCorrectionHistory(); }
+    if (e.target.id === "correction_search_unit") { corrUnitSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); window.renderCorrectionHistory(); }
+    if (e.target.id === "correction_search_item") { corrItemSearch = e.target.value.toLowerCase(); window.renderCorrectionCentre(); window.renderCorrectionHistory(); }
+});
+
+document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-correct-item]");
+    if (btn) {
+        const itemId = btn.dataset.correctItem;
+        const record = (state.correctionCentreRecords || []).find(r => String(r.id) === itemId);
+        if (record) {
+            document.getElementById("corrItemId").value = record.id;
+            document.getElementById("corrCurrentDecision").textContent = record.record_type;
+            document.getElementById("corrNewDecision").value = "";
+            document.getElementById("corrReason").value = "";
+            document.getElementById("correctionModal").classList.add("show");
+        }
+    }
+
+    if (e.target.closest("#closeCorrectionModal")) {
+        document.getElementById("correctionModal").classList.remove("show");
+    }
+});
+
+document.addEventListener("submit", async (e) => {
+    if (e.target.id === "correctionForm") {
+        e.preventDefault();
+        const itemId = document.getElementById("corrItemId").value;
+        const newDecision = document.getElementById("corrNewDecision").value;
+        const reason = document.getElementById("corrReason").value;
+
+        if (!reason.trim()) return toast("Correction reason is mandatory.");
+        if (!newDecision) return toast("Please select a new decision.");
+
+        try {
+            startProgress();
+            state = await window.uniformManager.correctDecision({ itemId, newDecision, reason, correctedBy: 'Admin' });
+            stopProgress();
+            document.getElementById("correctionModal").classList.remove("show");
+            
+            if (typeof window.renderCorrectionCentre === "function") window.renderCorrectionCentre();
+            if (typeof window.renderCorrectionHistory === "function") window.renderCorrectionHistory();
+            if (typeof renderDeductions === "function") renderDeductions();
+            toast("Correction successfully recorded and locked.");
+        } catch (err) {
+            stopProgress();
+            showImportError(err.message || "Failed to apply correction.");
+        }
+    }
 });

@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld("uniformManager", {
   upsertItem: (item) => safeInvoke("app:upsertItem", item),
   deleteItem: (itemId) => safeInvoke("app:deleteItem", itemId),
   updateReview: (action) => safeInvoke("app:updateReview", action),
+  correctDecision: (payload) => safeInvoke("app:correctDecision", payload),
   deleteReview: (reviewId) => safeInvoke("app:deleteReview", reviewId),
   updateDistributionRow: (record) => safeInvoke("app:updateDistributionRow", record),
   deleteDistributionRow: (key) => safeInvoke("app:deleteDistributionRow", key),
@@ -45,7 +46,6 @@ contextBridge.exposeInMainWorld("uniformManager", {
   exportExcel: (config) => safeInvoke("app:exportExcel", config),
   
   exportAnalyticsExcel: (config) => safeInvoke("app:exportAnalyticsExcel", config),
-  // NEW REQUIREMENT: Decision Register PDF Export API Exposure
   exportDecisionRegisterPdf: (config) => safeInvoke("app:exportDecisionRegisterPdf", config),
   getAnalyticsData: (reportType, filters) => safeInvoke("app:getAnalyticsData", { reportType, filters })
 });

@@ -33,7 +33,7 @@ module.exports = ({ db, scalar, all }) => {
         
         let joinReviewQueue = `
             LEFT JOIN uniform_items itm ON lower(ui.item_name) = lower(itm.item_name)
-            LEFT JOIN review_queue_items rqi ON ui.id = rqi.uniform_issue_id
+            LEFT JOIN review_queue_items rqi ON ui.id = rqi.uniform_issue_id AND COALESCE(rqi.is_active, 1) = 1
         `;
 
         if (filters.decisionStatus && filters.decisionStatus !== 'All') {
@@ -99,7 +99,7 @@ module.exports = ({ db, scalar, all }) => {
 
     // Generic function to pull live operational ledger data for all Decision Registers
     function getDecisionRegister(filters) {
-        let where = "WHERE rqi.decision IN ('Deduct', 'Hold', 'Waive')";
+        let where = "WHERE rqi.decision IN ('Deduct', 'Hold', 'Waive') AND COALESCE(rqi.is_active, 1) = 1";
         const params = [];
 
         if (filters.fy) {
@@ -127,6 +127,7 @@ module.exports = ({ db, scalar, all }) => {
             SELECT
                 rq.issue_month,
                 rq.issue_year,
+                rqi.id,
                 rqi.employee_code,
                 COALESCE(e.employee_name, rq.employee_name, rqi.employee_code) AS employee_name,
                 COALESCE(rq.unit, e.unit, '') AS unit,

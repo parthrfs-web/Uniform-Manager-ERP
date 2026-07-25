@@ -13,15 +13,21 @@
   </head>
   <body>
     <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark">UM</div>
-        <div>
-          <h1>Uniform Manager</h1>
-          <p>Offline Desktop</p>
+      
+      <div class="sidebar-section-top">
+        <div class="brand">
+          <div class="brand-mark">UM</div>
+          <div>
+            <h1>Uniform Manager</h1>
+            <p>Offline Desktop</p>
+          </div>
         </div>
+        <nav>
+          <button class="nav-button active" data-view="dashboard">Dashboard</button>
+        </nav>
       </div>
-      <nav>
-        <button class="nav-button active" data-view="dashboard">Dashboard</button>
+
+      <nav class="sidebar-section-middle">
         <button class="nav-button" data-view="import">Import Excel</button>
         <button class="nav-button" data-view="employees">Employees</button>
         <button class="nav-button" data-view="issues">Distribution Register</button>
@@ -29,19 +35,24 @@
         <button class="nav-button" data-view="review">Review Queue</button>
         <button class="nav-button" data-view="deductions">Payroll Register</button>
         
-        <div style="padding: 12px 13px 4px; color: #5c748c; font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px;">Analytics Reports</div>
+        <div class="nav-header">Analytics Reports</div>
         <button class="nav-button" data-view="analytics_monthly">Monthly Report</button>
         <button class="nav-button" data-view="analytics_yearly">Yearly Report</button>
         <button class="nav-button" data-view="analytics_unit">Unit Wise Report</button>
         <button class="nav-button" data-view="analytics_item">Item Wise Report</button>
         <button class="nav-button" data-view="analytics_employee">Employee Wise Report</button>
-
-        <button class="nav-button danger-nav" data-view="reset" style="margin-top: 10px;">Data Management</button>
       </nav>
-      <div class="db-box">
-        <span>Local database</span>
-        <strong id="dbPath">Loading...</strong>
+
+      <div class="sidebar-section-bottom">
+        <nav>
+          <button class="nav-button danger-nav" data-view="reset">Data Management</button>
+        </nav>
+        <div class="db-box">
+          <span>Local database</span>
+          <strong id="dbPath">Loading...</strong>
+        </div>
       </div>
+
     </aside>
 
     <main>
@@ -148,7 +159,7 @@
         <form id="itemForm" class="item-form">
           <input name="id" type="hidden" />
           <input name="item_code" placeholder="Item code" required />
-          <input name="item_name" placeholder="Item name" required />
+          <input name="item_name" data-smart-picker="items" autocomplete="off" placeholder="Item name" required />
           <input name="category" placeholder="Category" />
           <input name="size" placeholder="Size" />
           <input name="cost" type="number" min="0" step="0.01" placeholder="Cost" />
@@ -196,7 +207,7 @@
       <!-- Employees View -->
       <section class="view" id="employees">
         <div class="toolbar">
-          <input id="employeeSearch" placeholder="Search code, name, unit, godown or mobile" />
+          <input id="employeeSearch" data-smart-picker="employees" autocomplete="off" placeholder="Search code, name, unit, godown or mobile" />
         </div>
         <div class="panel flush">
           <div class="table-wrap">
@@ -359,8 +370,8 @@
         </div>
         <form id="policyForm" class="policy-form">
           <input name="id" type="hidden" />
-          <input name="unit" placeholder="Client / Unit" required />
-          <input name="item_name" placeholder="Item" required />
+          <input name="unit" data-smart-picker="units" autocomplete="off" placeholder="Client / Unit" required />
+          <input name="item_name" data-smart-picker="items" autocomplete="off" placeholder="Item" required />
           <input name="yearly_entitlement" type="number" min="0" placeholder="Allowed qty" required />
           <input name="item_cost" type="number" min="0" step="0.01" placeholder="Cost" required />
           <button id="savePolicyBtn" class="primary" type="submit">Save Policy</button>
@@ -375,7 +386,7 @@
               </div>
             </div>
             <div class="policy-search">
-              <input id="policySearch" placeholder="Search unit, item or policy" />
+              <input id="policySearch" data-smart-picker="units" autocomplete="off" placeholder="Search unit, item or policy" />
             </div>
             <div id="policyUnitList" class="unit-list"></div>
           </div>
@@ -410,16 +421,18 @@
         </div>
       </section>
 
-      <!-- ============================================== -->
-      <!-- NEW ANALYTICS MODULE SECTIONS -->
-      <!-- ============================================== -->
+      <!-- ANALYTICS MODULE SECTIONS -->
+      <!-- RESTORED: Monthly Report with standard <select> for fixed months -->
+      <!-- RESTORED: Employee Wise Report without smart picker for employee field -->
 
       <!-- Analytics: Monthly Report -->
       <section class="view" id="analytics_monthly">
         <div class="panel flush" style="padding: 18px; margin-bottom: 18px; background: #131922;">
             <form id="form_analytics_monthly" class="analytics-form">
                 <div class="primary-filters">
-                    <input type="number" name="fy" placeholder="Financial Year (e.g. 2026)" required />
+                    <input type="number" name="fy" data-smart-picker="fys" autocomplete="off" placeholder="Financial Year (e.g. 2026)" required />
+                    
+                    <!-- RESTORED NATIVE MONTH SELECTOR -->
                     <select name="month" required>
                         <option value="">Select Month</option>
                         <option value="1">January</option><option value="2">February</option>
@@ -429,14 +442,15 @@
                         <option value="9">September</option><option value="10">October</option>
                         <option value="11">November</option><option value="12">December</option>
                     </select>
+                    
                     <button type="submit" class="primary">Generate Report</button>
                 </div>
                 <details class="advanced-filters">
                     <summary>Advanced Filters</summary>
                     <div class="filter-grid">
-                        <input type="text" name="unit" placeholder="Unit (Optional)" />
-                        <input type="text" name="employee" placeholder="Emp Code (Optional)" />
-                        <input type="text" name="item" placeholder="Item (Optional)" />
+                        <input type="text" name="unit" data-smart-picker="units" autocomplete="off" placeholder="Unit (Optional)" />
+                        <input type="text" name="employee" data-smart-picker="employees" autocomplete="off" placeholder="Emp Code (Optional)" />
+                        <input type="text" name="item" data-smart-picker="items" autocomplete="off" placeholder="Item (Optional)" />
                         <select name="decisionStatus">
                             <option value="All">All Reviews</option>
                             <option value="OK">OK (No Excess)</option>
@@ -460,15 +474,15 @@
         <div class="panel flush" style="padding: 18px; margin-bottom: 18px; background: #131922;">
             <form id="form_analytics_yearly" class="analytics-form">
                 <div class="primary-filters">
-                    <input type="number" name="fy" placeholder="Financial Year (e.g. 2026)" required />
+                    <input type="number" name="fy" data-smart-picker="fys" autocomplete="off" placeholder="Financial Year (e.g. 2026)" required />
                     <button type="submit" class="primary">Generate Report</button>
                 </div>
                 <details class="advanced-filters">
                     <summary>Advanced Filters</summary>
                     <div class="filter-grid">
-                        <input type="text" name="unit" placeholder="Unit (Optional)" />
-                        <input type="text" name="employee" placeholder="Emp Code (Optional)" />
-                        <input type="text" name="item" placeholder="Item (Optional)" />
+                        <input type="text" name="unit" data-smart-picker="units" autocomplete="off" placeholder="Unit (Optional)" />
+                        <input type="text" name="employee" data-smart-picker="employees" autocomplete="off" placeholder="Emp Code (Optional)" />
+                        <input type="text" name="item" data-smart-picker="items" autocomplete="off" placeholder="Item (Optional)" />
                         <select name="decisionStatus">
                             <option value="All">All Reviews</option>
                             <option value="OK">OK (No Excess)</option>
@@ -492,8 +506,8 @@
         <div class="panel flush" style="padding: 18px; margin-bottom: 18px; background: #131922;">
             <form id="form_analytics_unit" class="analytics-form">
                 <div class="primary-filters">
-                    <input type="number" name="fy" placeholder="Year (e.g. 2026)" required />
-                    <input type="text" name="unit" placeholder="Unit Name" required />
+                    <input type="number" name="fy" data-smart-picker="fys" autocomplete="off" placeholder="Year (e.g. 2026)" required />
+                    <input type="text" name="unit" data-smart-picker="units" autocomplete="off" placeholder="Unit Name" required />
                     <button type="submit" class="primary">Generate Report</button>
                 </div>
                 <details class="advanced-filters">
@@ -501,13 +515,13 @@
                     <div class="filter-grid">
                         <select name="month">
                             <option value="">Month (Optional)</option>
-                            <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
-                            <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
-                            <option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option>
-                            <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+                            <option value="1">January</option><option value="2">February</option><option value="3">March</option>
+                            <option value="4">April</option><option value="5">May</option><option value="6">June</option>
+                            <option value="7">July</option><option value="8">August</option><option value="9">September</option>
+                            <option value="10">October</option><option value="11">November</option><option value="12">December</option>
                         </select>
-                        <input type="text" name="employee" placeholder="Emp Code (Optional)" />
-                        <input type="text" name="item" placeholder="Item (Optional)" />
+                        <input type="text" name="employee" data-smart-picker="employees" autocomplete="off" placeholder="Emp Code (Optional)" />
+                        <input type="text" name="item" data-smart-picker="items" autocomplete="off" placeholder="Item (Optional)" />
                         <select name="decisionStatus">
                             <option value="All">All Reviews</option>
                             <option value="OK">OK (No Excess)</option>
@@ -531,8 +545,8 @@
         <div class="panel flush" style="padding: 18px; margin-bottom: 18px; background: #131922;">
             <form id="form_analytics_item" class="analytics-form">
                 <div class="primary-filters">
-                    <input type="number" name="fy" placeholder="Year (e.g. 2026)" required />
-                    <input type="text" name="item" placeholder="Item Name" required />
+                    <input type="number" name="fy" data-smart-picker="fys" autocomplete="off" placeholder="Year (e.g. 2026)" required />
+                    <input type="text" name="item" data-smart-picker="items" autocomplete="off" placeholder="Item Name" required />
                     <button type="submit" class="primary">Generate Report</button>
                 </div>
                 <details class="advanced-filters">
@@ -540,13 +554,13 @@
                     <div class="filter-grid">
                         <select name="month">
                             <option value="">Month (Optional)</option>
-                            <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
-                            <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
-                            <option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option>
-                            <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+                            <option value="1">January</option><option value="2">February</option><option value="3">March</option>
+                            <option value="4">April</option><option value="5">May</option><option value="6">June</option>
+                            <option value="7">July</option><option value="8">August</option><option value="9">September</option>
+                            <option value="10">October</option><option value="11">November</option><option value="12">December</option>
                         </select>
-                        <input type="text" name="unit" placeholder="Unit (Optional)" />
-                        <input type="text" name="employee" placeholder="Emp Code (Optional)" />
+                        <input type="text" name="unit" data-smart-picker="units" autocomplete="off" placeholder="Unit (Optional)" />
+                        <input type="text" name="employee" data-smart-picker="employees" autocomplete="off" placeholder="Emp Code (Optional)" />
                         <select name="decisionStatus">
                             <option value="All">All Reviews</option>
                             <option value="OK">OK (No Excess)</option>
@@ -565,13 +579,13 @@
         <div id="content_analytics_item"></div>
       </section>
 
-      <!-- Analytics: Employee Wise Report -->
+      <!-- Analytics: Employee Wise Report (RESTORED TO ORIGINAL WITHOUT SMART PICKER) -->
       <section class="view" id="analytics_employee">
         <div class="panel flush" style="padding: 18px; margin-bottom: 18px; background: #131922;">
             <form id="form_analytics_employee" class="analytics-form">
                 <div class="primary-filters">
-                    <input type="number" name="fy" placeholder="Year (Optional)" />
-                    <input type="text" name="employee" placeholder="Employee Code" required />
+                    <input type="number" name="fy" data-smart-picker="fys" autocomplete="off" placeholder="Year (Optional)" />
+                    <input type="text" name="employee" autocomplete="off" placeholder="Employee Code" required />
                     <button type="submit" class="primary">Generate Report</button>
                 </div>
                 <details class="advanced-filters">
@@ -579,13 +593,13 @@
                     <div class="filter-grid">
                         <select name="month">
                             <option value="">Month (Optional)</option>
-                            <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
-                            <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
-                            <option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option>
-                            <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+                            <option value="1">January</option><option value="2">February</option><option value="3">March</option>
+                            <option value="4">April</option><option value="5">May</option><option value="6">June</option>
+                            <option value="7">July</option><option value="8">August</option><option value="9">September</option>
+                            <option value="10">October</option><option value="11">November</option><option value="12">December</option>
                         </select>
-                        <input type="text" name="unit" placeholder="Unit (Optional)" />
-                        <input type="text" name="item" placeholder="Item (Optional)" />
+                        <input type="text" name="unit" data-smart-picker="units" autocomplete="off" placeholder="Unit (Optional)" />
+                        <input type="text" name="item" data-smart-picker="items" autocomplete="off" placeholder="Item (Optional)" />
                         <select name="decisionStatus">
                             <option value="All">All Reviews</option>
                             <option value="OK">OK (No Excess)</option>
@@ -607,262 +621,336 @@
     </main>
 
     <!-- Modals -->
-    <div id="individualReviewModal" class="modal-backdrop">
-      <form id="individualReviewForm" class="modal" style="width: 90vw; max-width: 1040px; height: 90vh;">
-        <header class="modal-header">
-          <div>
-            <h3 id="indRevTitle">Review Excess Transactions</h3>
-            <p id="indRevSubtitle" style="color: var(--muted); font-size: 13px;"></p>
-          </div>
-          <button type="button" class="secondary" onclick="closeIndividualReviewModal()">Close</button>
-        </header>
-        <div style="padding: 24px; overflow-y: auto; flex: 1; background: #0b1016;">
-          
-          <h4 style="color: var(--muted); margin: 0 0 12px; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Section 1: Employee Summary</h4>
-          <div class="mini-stats" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); margin-bottom: 24px;" id="indRevSummary"></div>
-          
-          <h4 style="color: var(--muted); margin: 0 0 12px; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Section 2: Past Two Years History</h4>
-          <div class="panel flush" style="margin-bottom: 24px;">
-            <div class="table-wrap">
-              <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
-                <thead style="background: #1e2733;">
-                    <tr>
-                        <th style="padding: 10px; border: 1px solid var(--line); text-align: left; color: #b9c4cf;">Date</th>
-                        <th style="padding: 10px; border: 1px solid var(--line); text-align: left; color: #b9c4cf;">Qty</th>
-                        <th style="padding: 10px; border: 1px solid var(--line); text-align: left; color: #b9c4cf;">Unit</th>
-                        <th style="padding: 10px; border: 1px solid var(--line); text-align: left; color: #b9c4cf;">Period</th>
-                        <th style="padding: 10px; border: 1px solid var(--line); text-align: left; color: #b9c4cf;">Remarks</th>
-                    </tr>
-                </thead>
-                <tbody id="indRevHistoryRows"></tbody>
-              </table>
-            </div>
-          </div>
-
-          <h4 style="color: var(--muted); margin: 0 0 12px; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Section 3: Individual Excess Transaction Review</h4>
-          <div id="indRevTransactions" style="margin-bottom: 24px;"></div>
-
-          <h4 style="color: var(--muted); margin: 0 0 12px; text-transform: uppercase; font-size: 12px; letter-spacing: 0.5px;">Section 4: Review Summary</h4>
-          <div class="panel flush" style="background: #111821; margin-bottom: 0;">
-             <div style="padding: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 14px;" id="indRevCalculatedTotals">
-             </div>
-          </div>
-        </div>
-        
-        <footer class="modal-footer" style="background: var(--panel); justify-content: space-between; padding: 16px 24px;">
-            <div style="display: flex; gap: 16px; align-items: center;">
-                <label style="display:flex; align-items:center; gap:8px;">
-                    <span style="color:var(--muted); font-size: 13px;">Approved By:</span>
-                    <input type="text" id="indRevApprovedBy" required style="width: 200px; background: #111821; border: 1px solid var(--line); color: #fff; padding: 8px 10px; border-radius: 4px;" />
-                </label>
-                <label style="display:flex; align-items:center; gap:8px;">
-                    <span style="color:var(--muted); font-size: 13px;">Reason:</span>
-                    <input type="text" id="indRevGeneralReason" required placeholder="General reason..." style="width: 280px; background: #111821; border: 1px solid var(--line); color: #fff; padding: 8px 10px; border-radius: 4px;" />
-                </label>
-            </div>
-            <div style="display: flex; align-items: center;">
-                <span id="indRevSaveMsg" style="color: var(--amber); margin-right: 16px; font-size: 13px; font-weight: 600;"></span>
-                <button class="primary" type="submit" id="indRevSaveBtn">Save Decisions</button>
-            </div>
-        </footer>
-      </form>
-    </div>
-    
-    <div id="archiveRegisterModal" class="modal-backdrop">
-      <form id="archiveRegisterForm" class="modal" style="width: 500px;">
-        <header class="modal-header">
-          <div>
-            <h3>Archive Current Register</h3>
-            <p>Save a permanent snapshot of the current live register.</p>
-          </div>
-          <button type="button" class="secondary" onclick="closeArchiveRegisterModal()">Cancel</button>
-        </header>
-        <div style="padding: 24px; display: grid; gap: 16px;">
-            <label style="display: grid; gap: 6px;">
-                <span style="color: var(--muted); font-size: 13px;">Archive Name</span>
-                <input type="text" name="archive_name" required placeholder="July 2026 Final" />
-            </label>
-        </div>
-        <footer class="modal-footer">
-          <button class="primary" type="submit">Archive</button>
-        </footer>
-      </form>
-    </div>
-
-    <div id="deletePayrollArchiveModal" class="modal-backdrop">
-      <div class="modal" style="width: 560px;">
-        <header class="modal-header">
-          <div>
-            <h3 id="deletePayrollArchiveTitle">Delete Payroll Archive</h3>
-            <p id="deletePayrollArchiveSubtitle">Dangerous administrative action.</p>
-          </div>
-          <button id="cancelPayrollArchiveDeleteTop" class="secondary" type="button">Cancel</button>
-        </header>
-        <div style="padding: 24px;">
-          <p id="deletePayrollArchiveMessage" style="white-space: pre-line; line-height: 1.6; color: var(--ink); margin: 0;"></p>
-          <div id="deletePayrollArchiveConfirmWrap" style="display: none; margin-top: 18px;">
-            <label style="display: grid; gap: 8px;">
-              <span style="color: var(--muted); font-size: 13px;">Confirmation text</span>
-              <input id="deletePayrollArchiveConfirmInput" type="text" autocomplete="off" style="width: 100%;" />
-            </label>
-          </div>
-        </div>
-        <footer class="modal-footer">
-          <button id="cancelPayrollArchiveDeleteBtn" class="secondary" type="button">Cancel</button>
-          <button id="confirmPayrollArchiveDeleteBtn" class="danger" type="button">Continue</button>
-        </footer>
-      </div>
-    </div>
-
-    <div id="resetItemsAndPoliciesModal" class="modal-backdrop">
-      <div class="modal" style="width: 560px;">
-        <header class="modal-header">
-          <div>
-            <h3 id="resetItemsAndPoliciesTitle">Reset Items &amp; Policies</h3>
-          </div>
-          <button id="cancelItemsAndPoliciesResetTop" class="secondary" type="button">Cancel</button>
-        </header>
-        <div style="padding: 24px;">
-          <p id="resetItemsAndPoliciesMessage" style="white-space: pre-line; line-height: 1.6; color: var(--ink); margin: 0;"></p>
-          <div id="resetItemsAndPoliciesConfirmWrap" style="display: none; margin-top: 18px;">
-            <label style="display: grid; gap: 8px;">
-              <span style="color: var(--muted); font-size: 13px;">Confirmation text</span>
-              <input id="resetItemsAndPoliciesConfirmInput" type="text" autocomplete="off" style="width: 100%;" />
-            </label>
-          </div>
-        </div>
-        <footer class="modal-footer">
-          <button id="cancelItemsAndPoliciesResetBtn" class="secondary" type="button">Cancel</button>
-          <button id="confirmItemsAndPoliciesResetBtn" class="danger" type="button">Continue</button>
-        </footer>
-      </div>
-    </div>
-
-    <div id="importPreviewModal" class="modal-backdrop">
-      <div class="modal" style="width: 90vw; max-width: 1200px;">
-        <header class="modal-header">
-          <div>
-            <h3>Import Validation Preview</h3>
-            <p>Review validation errors and duplicates before committing.</p>
-          </div>
-          <button id="cancelPreviewBtn" class="secondary" type="button">Cancel</button>
-        </header>
-        <div class="panel" style="margin: 18px;">
-            <div class="mini-stats" style="grid-template-columns: repeat(5, minmax(130px, 1fr));">
-              <article><span>Worksheet Rows</span><strong id="previewTotal">0</strong></article>
-              <article><span>Valid Rows</span><strong id="previewValid" class="text-green">0</strong></article>
-              <article><span>Invalid Rows</span><strong id="previewErrors" class="text-red">0</strong></article>
-              <article><span>Duplicate Rows</span><strong id="previewDuplicates" class="text-amber">0</strong></article>
-              <article><span>Generated Issues</span><strong id="previewIssues">0</strong></article>
-            </div>
-            <div class="table-wrap" style="max-height: 400px; overflow: auto; border: 1px solid var(--line); border-radius: 6px;">
-                <table>
-                    <thead><tr><th>Row</th><th>Code</th><th>Name</th><th>Reason</th></tr></thead>
-                    <tbody id="previewErrorRows"></tbody>
-                </table>
-            </div>
-        </div>
-        <footer class="modal-footer">
-          <button id="commitImportBtn" class="primary" type="button">Confirm & Import</button>
-        </footer>
-      </div>
-    </div>
-
-    <div id="progressModal" class="modal-backdrop">
-      <div class="modal" style="width: 460px; text-align: center;">
-        <div class="panel flush" style="margin: 0;">
-          <div style="padding: 32px 24px;">
-            <h3 style="margin: 0 0 16px; font-size: 18px;">Processing Data...</h3>
-            
-            <div style="display: flex; justify-content: space-between; font-size: 13px; color: var(--ink); font-weight: 600; margin-bottom: 8px;">
-              <span id="progressStatus" style="color: var(--muted); text-align: left;">Please wait...</span>
-              <span id="progressTime" style="color: var(--blue);">00:00</span>
-            </div>
-            
-            <div style="background: #111821; border-radius: 8px; height: 16px; overflow: hidden; border: 1px solid var(--line); margin-bottom: 8px;">
-              <div id="progressBar" style="background: var(--blue); width: 0%; height: 100%; transition: width 0.2s ease;"></div>
-            </div>
-            
-            <div style="display: flex; justify-content: space-between; font-size: 13px; font-weight: 700; color: var(--ink);">
-              <span>Progress</span>
-              <span id="progressPercent">0%</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div id="importModal" class="modal-backdrop">
+    <div class="modal-backdrop" id="importModal">
       <div class="modal">
-        <header class="modal-header">
+        <div class="modal-header">
           <div>
-            <h3>Review Workbook Sheets</h3>
-            <p id="importModalSubtitle">Select the sheet that contains the employee distribution data.</p>
+            <h3>Confirm Detected Sheet</h3>
+            <p id="importModalSubtitle"></p>
           </div>
-          <button id="closeImportModal" class="secondary" type="button">Cancel</button>
-        </header>
-        <div id="sheetCandidates" class="candidate-list"></div>
-        <footer class="modal-footer">
-          <button id="confirmImportBtn" class="primary" type="button" disabled>Preview Data</button>
-        </footer>
+          <button id="closeImportModal" class="secondary" type="button">✕</button>
+        </div>
+        <div class="candidate-list" id="sheetCandidates"></div>
+        <div class="modal-footer">
+          <button id="confirmImportBtn" class="primary" type="button" disabled>Load Selected Sheet</button>
+        </div>
       </div>
     </div>
 
-    <div id="employeeModal" class="modal-backdrop">
-      <form id="employeeForm" class="modal employee-modal">
-        <header class="modal-header">
+    <div class="modal-backdrop" id="importPreviewModal">
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <h3>Review Selected Data</h3>
+            <p>Ensure data is correct before saving to local database.</p>
+          </div>
+        </div>
+        <div style="padding: 18px; display: grid; gap: 14px;">
+           <div class="mini-stats" style="grid-template-columns: repeat(5, 1fr); margin-bottom: 0;">
+              <article><span>Total Rows</span><strong id="previewTotal">0</strong></article>
+              <article><span>Valid Rows</span><strong class="text-green" id="previewValid">0</strong></article>
+              <article><span>Invalid Rows</span><strong class="text-red" id="previewErrors">0</strong></article>
+              <article><span>Duplicate Rows</span><strong class="text-amber" id="previewDuplicates">0</strong></article>
+              <article><span>Item Entries</span><strong class="text-blue" id="previewIssues">0</strong></article>
+           </div>
+           
+           <div class="panel flush" style="margin-bottom: 0;">
+             <div class="panel-heading">
+               <h3 style="color: var(--red);">Row Validation Errors</h3>
+             </div>
+             <div class="table-wrap" style="max-height: 240px; overflow-y: auto;">
+               <table>
+                 <thead><tr><th>Row</th><th>Code</th><th>Name</th><th>Reason</th></tr></thead>
+                 <tbody id="previewErrorRows"></tbody>
+               </table>
+             </div>
+           </div>
+           
+           <div class="danger-zone" style="max-width: none; padding: 14px; margin-top: 4px;">
+             <h4 style="margin: 0 0 6px 0; color: var(--red);">Important</h4>
+             <p style="margin: 0; font-size: 13px;">Rows containing errors will be skipped during import. Valid rows will still be imported.</p>
+           </div>
+        </div>
+        <div class="modal-footer">
+          <button id="cancelPreviewBtn" class="secondary" type="button">Cancel</button>
+          <button id="commitImportBtn" class="primary" type="button">Confirm & Import to Database</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="progressModal">
+      <div class="modal" style="width: 480px;">
+        <div class="modal-header" style="border: 0; padding-bottom: 0;">
+          <div>
+            <h3>Processing Data</h3>
+            <p id="progressStatus" style="color: var(--blue);">Please wait...</p>
+          </div>
+        </div>
+        <div style="padding: 24px 18px;">
+           <div style="width: 100%; height: 8px; background: #1b2634; border-radius: 4px; overflow: hidden; margin-bottom: 12px;">
+              <div id="progressBar" style="height: 100%; width: 0%; background: var(--blue); transition: width 0.2s ease;"></div>
+           </div>
+           <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); font-weight: 600;">
+              <span id="progressPercent">0%</span>
+              <span id="progressTime">00:00</span>
+           </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="employeeModal">
+      <div class="modal employee-modal">
+        <div class="modal-header">
           <div>
             <h3>Edit Employee</h3>
-            <p>Update imported master data stored on this PC.</p>
+            <p>Update personnel details. Will cascade updates securely.</p>
           </div>
-          <button id="closeEmployeeModal" class="secondary" type="button">Cancel</button>
-        </header>
-        <div class="employee-form-grid">
-          <label>Employee Code<input name="employee_code" readonly /></label>
-          <label>Employee Name<input name="employee_name" required /></label>
-          <label>Father Name<input name="father_name" /></label>
-          <label>Unit<input name="unit" /></label>
-          <label>Godown<input name="godown" /></label>
-          <label>Mobile<input name="mobile_number" /></label>
-          <label>Designation<input name="designation" /></label>
-          <label>Status<input name="status" /></label>
+          <button id="closeEmployeeModal" class="secondary" type="button">✕</button>
         </div>
-        <footer class="modal-footer">
-          <button class="primary" type="submit">Save Employee</button>
-        </footer>
-      </form>
+        <form id="employeeForm">
+          <div class="employee-form-grid">
+            <label>Employee Code<input name="employee_code" required /></label>
+            <label>Name<input name="employee_name" required /></label>
+            <label>Father/Husband Name<input name="father_name" /></label>
+            <label>Unit / Company<input name="unit" data-smart-picker="units" autocomplete="off" /></label>
+            <label>Godown Name<input name="godown" data-smart-picker="godowns" autocomplete="off" /></label>
+            <label>Mobile Number<input name="mobile_number" /></label>
+            <label>Designation<input name="designation" /></label>
+            <label>Status
+              <select name="status" style="width:100%">
+                <option value="Active">Active</option>
+                <option value="Inactive">Inactive</option>
+                <option value="Resigned">Resigned</option>
+              </select>
+            </label>
+          </div>
+          <div class="modal-footer">
+            <button class="primary" type="submit">Save Changes</button>
+          </div>
+        </form>
+      </div>
     </div>
 
-    <div id="distributionModal" class="modal-backdrop">
-      <form id="distributionForm" class="modal">
-        <header class="modal-header">
+    <div class="modal-backdrop" id="distributionModal">
+      <div class="modal" style="width: 420px;">
+        <div class="modal-header">
           <div>
-            <h3 id="distributionModalTitle">Edit Distribution Row</h3>
-            <p id="distributionModalSubtitle">Update item quantities for this employee/month row.</p>
+            <h3 id="distributionModalTitle">Distribution</h3>
+            <p id="distributionModalSubtitle"></p>
           </div>
-          <button id="closeDistributionModal" class="secondary" type="button">Cancel</button>
-        </header>
-        <div id="distributionQuantityFields" class="employee-form-grid"></div>
-        <footer class="modal-footer">
-          <button class="primary" type="submit">Save Distribution</button>
-        </footer>
-      </form>
+          <button id="closeDistributionModal" class="secondary" type="button">✕</button>
+        </div>
+        <form id="distributionForm">
+          <div id="distributionQuantityFields" style="display: grid; gap: 12px; padding: 18px; max-height: 400px; overflow-y: auto;">
+          </div>
+          <div class="modal-footer">
+            <button class="primary" type="submit">Update Distribution</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="rawIssueModal">
+      <div class="modal" style="width: 480px;">
+        <div class="modal-header">
+          <div>
+            <h3>Edit Distribution Record</h3>
+            <p>Modify an individual historical uniform issue.</p>
+          </div>
+          <button id="closeRawIssueModal" class="secondary" type="button">✕</button>
+        </div>
+        <form id="rawIssueForm">
+          <div style="display: grid; gap: 12px; padding: 18px; max-height: 500px; overflow-y: auto;">
+            <input type="hidden" name="id" />
+            <label style="display:grid; gap:4px; font-weight: 600; color: var(--muted);">Employee Code<input name="employee_code" readonly style="background: #111821; color: var(--muted); border: 1px solid var(--line); padding: 8px;" /></label>
+            <label style="display:grid; gap:4px; font-weight: 600; color: var(--muted);">Employee Name<input name="employee_name" readonly style="background: #111821; color: var(--muted); border: 1px solid var(--line); padding: 8px;" /></label>
+            <label style="display:grid; gap:4px; font-weight: 600; color: var(--muted);">Item Name<input name="item_name" data-smart-picker="items" autocomplete="off" required style="background: #111821; color: var(--ink); border: 1px solid var(--line); padding: 8px;" /></label>
+            <label style="display:grid; gap:4px; font-weight: 600; color: var(--muted);">Quantity<input name="quantity" type="number" min="0" step="0.01" required style="background: #111821; color: var(--ink); border: 1px solid var(--line); padding: 8px;" /></label>
+            <label style="display:grid; gap:4px; font-weight: 600; color: var(--muted);">Distribution Date<input name="issued_at" type="date" required style="background: #111821; color: var(--ink); border: 1px solid var(--line); padding: 8px;" /></label>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+               <label style="display:grid; gap:4px; font-weight: 600; color: var(--muted);">Period Month (1-12)<input name="issue_month" type="number" min="1" max="12" style="background: #111821; color: var(--ink); border: 1px solid var(--line); padding: 8px;" /></label>
+               <label style="display:grid; gap:4px; font-weight: 600; color: var(--muted);">Period Year<input name="issue_year" type="number" min="2000" style="background: #111821; color: var(--ink); border: 1px solid var(--line); padding: 8px;" /></label>
+            </div>
+            <label style="display:grid; gap:4px; font-weight: 600; color: var(--muted);">Remarks<input name="remarks" style="background: #111821; color: var(--ink); border: 1px solid var(--line); padding: 8px;" /></label>
+          </div>
+          <div class="modal-footer">
+            <button class="primary" type="submit">Update Record</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- INDIVIDUAL REVIEW MODAL -->
+    <div class="modal-backdrop" id="individualReviewModal">
+      <div class="modal" style="width: min(880px, 96vw);">
+        <div class="modal-header">
+          <div>
+            <h3 id="indRevTitle">Review Excess Transactions</h3>
+            <p id="indRevSubtitle" style="color: var(--blue); font-weight: 600;"></p>
+          </div>
+          <button type="button" class="secondary" onclick="closeIndividualReviewModal()">✕</button>
+        </div>
+        
+        <form id="individualReviewForm" style="display: flex; flex-direction: column; max-height: calc(88vh - 72px);">
+            <div style="padding: 20px; overflow-y: auto; flex: 1;">
+                
+                <div class="mini-stats" style="grid-template-columns: repeat(3, 1fr); margin-bottom: 24px;" id="indRevSummary"></div>
+                
+                <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 24px;">
+                    <div>
+                        <h4 style="margin: 0 0 16px 0; border-bottom: 1px solid var(--line); padding-bottom: 8px;">Excess Transactions</h4>
+                        <div id="indRevTransactions" style="display: flex; flex-direction: column; gap: 16px;"></div>
+                    </div>
+                    
+                    <div>
+                        <h4 style="margin: 0 0 16px 0; border-bottom: 1px solid var(--line); padding-bottom: 8px;">Past 2 Year Distribution History</h4>
+                        <div class="table-wrap" style="max-height: 360px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px;">
+                            <table style="margin: 0;">
+                                <thead style="position: sticky; top: 0; z-index: 1;">
+                                    <tr><th>Date</th><th>Qty</th><th>Unit</th><th>Period</th><th>Remarks</th></tr>
+                                </thead>
+                                <tbody id="indRevHistoryRows"></tbody>
+                            </table>
+                        </div>
+                        
+                        <div class="panel flush" style="margin-top: 24px;">
+                            <div class="panel-heading" style="background: #131922; padding: 12px 16px;"><h4 style="margin: 0;">Calculated Totals</h4></div>
+                            <div id="indRevCalculatedTotals" style="padding: 16px; display: grid; gap: 12px;"></div>
+                        </div>
+                        
+                        <div class="panel flush" style="margin-top: 24px; background: #131922;">
+                            <div class="panel-heading" style="padding: 12px 16px;"><h4 style="margin: 0;">Final Approval</h4></div>
+                            <div style="padding: 16px; display: grid; gap: 16px;">
+                                <div>
+                                    <label style="display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px;">General Reason</label>
+                                    <input type="text" id="indRevGeneralReason" required placeholder="General reason for review..." style="width: 100%; background: #0f141b;">
+                                </div>
+                                <div>
+                                    <label style="display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px;">Approved By</label>
+                                    <input type="text" id="indRevApprovedBy" required placeholder="Name of approver" style="width: 100%; background: #0f141b;">
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+                
+            </div>
+            
+            <div class="modal-footer" style="padding: 16px 20px; background: var(--panel);">
+                <div style="flex: 1; color: var(--red); font-weight: 600; font-size: 13px;" id="indRevSaveMsg"></div>
+                <button type="button" class="secondary" onclick="closeIndividualReviewModal()">Cancel</button>
+                <button type="submit" class="primary" id="indRevSaveBtn">Save Decisions & Finalize</button>
+            </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- PAYROLL ARCHIVE MODAL -->
+    <div class="modal-backdrop" id="archiveRegisterModal">
+      <div class="modal" style="width: 480px;">
+        <div class="modal-header">
+          <div>
+            <h3>Archive Payroll Register</h3>
+            <p>Save the current live register into a historical read-only report.</p>
+          </div>
+          <button type="button" class="secondary" onclick="closeArchiveRegisterModal()">✕</button>
+        </div>
+        <form id="archiveRegisterForm">
+          <div style="padding: 18px; display: grid; gap: 16px;">
+            <div class="danger-zone" style="max-width: none; padding: 14px; margin-top: 0;">
+               <p style="margin: 0; font-size: 13px;">Archiving creates a permanent snapshot of the current live register. It does <b>not</b> delete the live data. The snapshot will be available in the Archive Manager.</p>
+            </div>
+            <label style="display: grid; gap: 6px; color: var(--muted); font-weight: 600;">
+              Archive Name / Payroll Month
+              <input name="archive_name" required placeholder="e.g. July 2026 Payroll" style="background: #111821; color: var(--ink);" />
+            </label>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="secondary" onclick="closeArchiveRegisterModal()">Cancel</button>
+            <button type="submit" class="primary">Create Archive</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- DATA DELETION CONFIRMATION MODALS -->
+    <div class="modal-backdrop" id="deletePayrollArchiveModal">
+      <div class="modal" style="width: 480px;">
+        <div class="modal-header">
+          <div>
+            <h3 id="deletePayrollArchiveTitle" style="color: var(--red);">Delete Payroll Archive</h3>
+          </div>
+          <button id="cancelPayrollArchiveDeleteTop" class="secondary" type="button">✕</button>
+        </div>
+        <div style="padding: 24px 18px; line-height: 1.6;" id="deletePayrollArchiveMessage"></div>
+        <div id="deletePayrollArchiveConfirmWrap" style="padding: 0 18px 24px; display: none;">
+           <input id="deletePayrollArchiveConfirmInput" placeholder="Type confirmation here..." style="width: 100%; border: 1px solid var(--red); color: var(--red); background: #2a1b20; font-weight: bold; text-align: center;" />
+        </div>
+        <div class="modal-footer">
+          <button id="cancelPayrollArchiveDeleteBtn" class="secondary" type="button">Cancel</button>
+          <button id="confirmPayrollArchiveDeleteBtn" class="danger" type="button">Continue</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="resetItemsAndPoliciesModal">
+      <div class="modal" style="width: 480px;">
+        <div class="modal-header">
+          <div>
+            <h3 id="resetItemsAndPoliciesTitle" style="color: var(--red);">Reset Items & Policies</h3>
+          </div>
+          <button id="cancelItemsAndPoliciesResetTop" class="secondary" type="button">✕</button>
+        </div>
+        <div style="padding: 24px 18px; line-height: 1.6;" id="resetItemsAndPoliciesMessage"></div>
+        <div id="resetItemsAndPoliciesConfirmWrap" style="padding: 0 18px 24px; display: none;">
+           <input id="resetItemsAndPoliciesConfirmInput" placeholder="Type confirmation here..." style="width: 100%; border: 1px solid var(--red); color: var(--red); background: #2a1b20; font-weight: bold; text-align: center;" />
+        </div>
+        <div class="modal-footer">
+          <button id="cancelItemsAndPoliciesResetBtn" class="secondary" type="button">Cancel</button>
+          <button id="confirmItemsAndPoliciesResetBtn" class="danger" type="button">Continue</button>
+        </div>
+      </div>
     </div>
 
     <div id="toast" class="toast"></div>
-    <script src="./renderer.js"></script>
+
     <script src="./shared/utils.js"></script>
-    <script src="./shared/tables.js"></script>
     <script src="./shared/dialogs.js"></script>
+    <script src="./shared/tables.js"></script>
+    <script src="./shared/smart-picker.js"></script>
+    <script>
+      const desktopApi = !!window.uniformManager;
+      let state = null;
+      let pendingInspection = null;
+      let selectedSheetName = null;
+      let currentPreviewData = null;
+      let employeeFilter = "";
+      let policySearch = "";
+      let selectedPolicyUnit = null;
+      let editingPolicyId = null;
+      let editingItemId = null;
+      let pendingDistributionEdit = null;
+      let progressTimer = null;
+      let progressStartTime = 0;
+      let reviewSearchText = "";
+      let reviewFilter = "All";
+      let selectedReviewEmployee = null;
+      let summaryCache = [];
+      let currentEmpData = null;
+      let currentStage2Items = [];
+      let pendingReviewDecision = null;
+      let distributionLimit = 300;
+    </script>
+    <script src="./import/import.js"></script>
     <script src="./employees/dialogs.js"></script>
-    <script src="./dashboard/dashboard.js"></script>
     <script src="./employees/employees.js"></script>
-    <script src="./policies/policies.js"></script>
     <script src="./inventory/inventory.js"></script>
+    <script src="./policies/policies.js"></script>
     <script src="./reviews/reviewQueue.js"></script>
     <script src="./payroll/payroll.js"></script>
-    <script src="./import/import.js"></script>
     <script src="./analytics/analytics.js"></script>
+    <script src="./dashboard/dashboard.js"></script>
     <script src="./boot.js"></script>
   </body>
 </html>

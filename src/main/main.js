@@ -345,6 +345,7 @@ ipcMain.handle("app:deletePolicy", (_event, policyId) => handleSafe(() => { db.d
 ipcMain.handle("app:upsertItem", (_event, item) => handleSafe(() => { db.upsertItem(item); return db.getState(); }));
 ipcMain.handle("app:deleteItem", (_event, itemId) => handleSafe(() => { db.deleteItem(itemId); return db.getState(); }));
 ipcMain.handle("app:updateReview", (_event, action) => handleSafe(() => { db.updateReview(action); return db.getState(); }));
+ipcMain.handle("app:correctDecision", (_event, payload) => handleSafe(() => { db.correctDecision(payload); return db.getState(); }));
 ipcMain.handle("app:deleteReview", (_event, reviewId) => handleSafe(() => { db.deleteReview(reviewId); return db.getState(); }));
 
 ipcMain.handle("app:updateDistributionRow", async (event, record) => handleSafe(async () => { 

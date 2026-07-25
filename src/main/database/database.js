@@ -156,6 +156,8 @@ const APP_SCHEMA = {
     "reviewed_by TEXT",
     "reviewed_at TEXT",
     "created_at TEXT NOT NULL",
+    "is_active INTEGER DEFAULT 1",
+    "is_corrected INTEGER DEFAULT 0",
     "FOREIGN KEY(review_queue_id) REFERENCES review_queue(id) ON DELETE CASCADE"
   ],
   payroll_batches: [
@@ -196,7 +198,8 @@ const APP_SCHEMA = {
     "exported_at TEXT",
     "approved_by TEXT",
     "approval_date TEXT",
-    "remarks TEXT"
+    "remarks TEXT",
+    "is_active INTEGER DEFAULT 1"
   ],
   waive_records: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -207,7 +210,8 @@ const APP_SCHEMA = {
     "reason TEXT NOT NULL",
     "remarks TEXT",
     "approved_by TEXT",
-    "created_at TEXT NOT NULL"
+    "created_at TEXT NOT NULL",
+    "is_active INTEGER DEFAULT 1"
   ],
   review_decisions: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -219,7 +223,8 @@ const APP_SCHEMA = {
     "reason TEXT",
     "approved_by TEXT",
     "remarks TEXT",
-    "created_at TEXT NOT NULL"
+    "created_at TEXT NOT NULL",
+    "is_active INTEGER DEFAULT 1"
   ],
   recovery_records: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -230,6 +235,15 @@ const APP_SCHEMA = {
     "quantity REAL NOT NULL DEFAULT 0",
     "recovery_type TEXT NOT NULL DEFAULT 'Return'",
     "condition_note TEXT",
+    "created_at TEXT NOT NULL"
+  ],
+  corrections: [
+    "id INTEGER PRIMARY KEY AUTOINCREMENT",
+    "review_queue_item_id INTEGER NOT NULL",
+    "old_decision TEXT NOT NULL",
+    "new_decision TEXT NOT NULL",
+    "reason TEXT NOT NULL",
+    "corrected_by TEXT",
     "created_at TEXT NOT NULL"
   ],
   audit_log: [

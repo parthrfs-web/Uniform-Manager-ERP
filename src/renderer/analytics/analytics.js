@@ -148,10 +148,9 @@ function createDecisionRegisterHTML(type) {
         </div>
         <div class="mini-stats" style="margin: 18px 18px 0 18px; grid-template-columns: repeat(4, 1fr);" id="${pfx}_summary_cards"></div>
         <div style="margin: 18px; display: flex; gap: 10px; background: #111821; padding: 12px; border-radius: 6px; border: 1px solid var(--line);">
-            <input type="text" id="${pfx}_search_code" placeholder="Employee Code" style="flex: 1;" />
-            <input type="text" id="${pfx}_search_name" placeholder="Employee Name" style="flex: 1;" />
-            <input type="text" id="${pfx}_search_unit" placeholder="Unit" style="flex: 1;" />
-            <input type="text" id="${pfx}_search_item" placeholder="Item" style="flex: 1;" />
+            <input type="text" id="${pfx}_search_emp" data-smart-picker="employees" autocomplete="off" placeholder="Employee (Code/Name)" style="flex: 1;" />
+            <input type="text" id="${pfx}_search_unit" data-smart-picker="units" autocomplete="off" placeholder="Unit" style="flex: 1;" />
+            <input type="text" id="${pfx}_search_item" data-smart-picker="items" autocomplete="off" placeholder="Item" style="flex: 1;" />
             <select id="${pfx}_search_decision" style="flex: 1;">
                 <option value="">All Decisions</option>
                 <option value="Deduct">Deduct</option>
@@ -178,15 +177,13 @@ function createDecisionRegisterHTML(type) {
 function updateDecisionRegister(type) {
     const data = AnalyticsState[type]?.decisionRegister || [];
     const pfx = `dr_${type}`;
-    const codeFilter = (document.getElementById(`${pfx}_search_code`)?.value || '').toLowerCase();
-    const nameFilter = (document.getElementById(`${pfx}_search_name`)?.value || '').toLowerCase();
+    const empFilter = (document.getElementById(`${pfx}_search_emp`)?.value || '').toLowerCase();
     const unitFilter = (document.getElementById(`${pfx}_search_unit`)?.value || '').toLowerCase();
     const itemFilter = (document.getElementById(`${pfx}_search_item`)?.value || '').toLowerCase();
     const decisionFilter = document.getElementById(`${pfx}_search_decision`)?.value || '';
 
     const filtered = data.filter(r => {
-        if (codeFilter && !String(r.employee_code).toLowerCase().includes(codeFilter)) return false;
-        if (nameFilter && !String(r.employee_name).toLowerCase().includes(nameFilter)) return false;
+        if (empFilter && !String(r.employee_code).toLowerCase().includes(empFilter) && !String(r.employee_name).toLowerCase().includes(empFilter)) return false;
         if (unitFilter && !String(r.unit).toLowerCase().includes(unitFilter)) return false;
         if (itemFilter && !String(r.item_name).toLowerCase().includes(itemFilter)) return false;
         if (decisionFilter && r.decision !== decisionFilter) return false;
@@ -240,11 +237,12 @@ function updateDecisionRegister(type) {
 
 function bindDecisionRegisterEvents(type) {
     const pfx = `dr_${type}`;
-    const inputs = [`${pfx}_search_code`, `${pfx}_search_name`, `${pfx}_search_unit`, `${pfx}_search_item`, `${pfx}_search_decision`];
+    const inputs = [`${pfx}_search_emp`, `${pfx}_search_unit`, `${pfx}_search_item`, `${pfx}_search_decision`];
     
     inputs.forEach(id => {
         const el = document.getElementById(id);
-        if (el) el.addEventListener(id.includes('decision') ? 'change' : 'input', () => updateDecisionRegister(type));
+        if (el) el.addEventListener('input', () => updateDecisionRegister(type));
+        if (el) el.addEventListener('change', () => updateDecisionRegister(type));
     });
 
     document.getElementById(`btn_export_${pfx}_excel`)?.addEventListener('click', () => exportDecisionRegisterExcel(type));
@@ -288,8 +286,7 @@ async function exportDecisionRegisterExcel(type) {
         filtersUsed: {
             "Report Type": titles[type],
             "Target Filter": period,
-            "Employee Code Filter": document.getElementById(`dr_${type}_search_code`)?.value || 'All',
-            "Employee Name Filter": document.getElementById(`dr_${type}_search_name`)?.value || 'All',
+            "Employee Filter": document.getElementById(`dr_${type}_search_emp`)?.value || 'All',
             "Unit Filter": document.getElementById(`dr_${type}_search_unit`)?.value || 'All',
             "Item Filter": document.getElementById(`dr_${type}_search_item`)?.value || 'All',
             "Decision Filter": document.getElementById(`dr_${type}_search_decision`)?.value || 'All',
