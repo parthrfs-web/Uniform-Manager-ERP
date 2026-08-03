@@ -31,6 +31,55 @@ body {
 }
 
 /* SIDEBAR LAYOUT ARCHITECTURE */
+/* 1. Container Layout */
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;           /* Forces space between the logo and the text */
+  padding: 22px 18px;  /* Matches your existing sidebar padding */
+  flex-shrink: 0;
+}
+
+/* 2. Logo Container */
+.sidebar-header .logo {
+  width: 42px;         /* Locks the width */
+  height: 42px;        /* Locks the height */
+  flex-shrink: 0;      /* Prevents the logo from squishing */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+}
+
+/* 3. Image Sizing */
+.sidebar-header .logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain; /* Keeps the logo proportional */
+}
+
+/* 4. Text Container */
+.sidebar-header .brand {
+  display: flex;
+  flex-direction: column; /* Stacks title and subtitle vertically */
+  justify-content: center;
+  gap: 4px;               /* Space between the two text lines */
+}
+
+/* 5. Typography */
+.sidebar-header .brand-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+  line-height: 1;
+}
+
+.sidebar-header .brand-subtitle {
+  font-size: 12px;
+  color: #9aa7b4;
+  line-height: 1;
+}
+
 .sidebar {
   height: 100vh;
   background: #0b1016;
