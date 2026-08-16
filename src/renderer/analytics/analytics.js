@@ -1,4 +1,5 @@
 const AnalyticsState = {
+    payroll_summary: null,
     monthly: null,
     yearly: null,
     unit: null,
@@ -126,7 +127,7 @@ function createDetailedTable(data) {
 }
 
 // ------------------------------------------------------------------
-// DECISION REGISTER LOGIC (Applied to all Analytics Reports)
+// DECISION REGISTER LOGIC (Applied to standard Analytics Reports)
 // ------------------------------------------------------------------
 
 function createDecisionRegisterHTML(type) {
@@ -376,6 +377,43 @@ async function renderAnalytics(reportType, containerId, data) {
         return;
     }
 
+    // --- NEW: PAYROLL SUMMARY SPECIFIC RENDERER ---
+    if (reportType === 'payroll_summary') {
+        const items = data.items || [];
+        const rows = data.rows || [];
+        
+        let ths = `<th>Sr No</th><th>Employee Code</th><th>Employee Name</th><th>Unit Name</th><th>Payroll Month</th><th style="min-width:140px;">Total Deduction Amount (₹)</th>`;
+        items.forEach(item => { ths += `<th>${escapeHtml(item)}</th>`; });
+        
+        let trs = rows.map(r => {
+            let tds = `<td>${r.sr_no}</td><td>${escapeHtml(r.employee_code)}</td><td>${escapeHtml(r.employee_name)}</td><td>${escapeHtml(r.unit)}</td><td>${escapeHtml(r.payroll_month)}</td><td class="text-red"><strong>${formatCost(r.total_amount)}</strong></td>`;
+            items.forEach(item => {
+                const qty = r.items[item] || 0;
+                tds += `<td>${qty}</td>`;
+            });
+            return `<tr>${tds}</tr>`;
+        }).join('');
+        
+        if (rows.length === 0) {
+            trs = `<tr><td colspan="${6 + items.length}" class="empty">No deductions found for this period.</td></tr>`;
+        }
+        
+        container.innerHTML = `
+        <div class="panel flush" style="margin-top: 24px;">
+            <div class="panel-heading" style="display: flex; justify-content: space-between; align-items: center;">
+                <h3>Detailed Payroll Summary</h3>
+            </div>
+            <div class="table-wrap" style="max-height: 600px; overflow: auto;">
+                <table>
+                    <thead><tr>${ths}</tr></thead>
+                    <tbody>${trs}</tbody>
+                </table>
+            </div>
+        </div>`;
+        
+        return; // Halt here for Payroll Summary so we don't render charts
+    }
+
     let html = createSummaryCardsHTML(data.summary);
 
     if (reportType === 'monthly') {
@@ -413,13 +451,9 @@ async function renderAnalytics(reportType, containerId, data) {
     }
 
     html += createDetailedTable(data.table || data.timeline);
-    
-    // Automatically inject the respective Decision Register
     html += createDecisionRegisterHTML(reportType);
     
     container.innerHTML = html;
-
-    // Attach local filter logic for the generated register
     bindDecisionRegisterEvents(reportType);
 }
 
@@ -428,7 +462,9 @@ const setupAnalyticsForm = (reportType) => {
     const btn = document.getElementById(`btn_export_analytics_${reportType}`);
     
     if (form) {
-        form.addEventListener('submit', async (e) => {
+        // Prevent duplicate listener bindings
+        form.removeEventListener('submit', form._submitHandler);
+        form._submitHandler = async (e) => {
             e.preventDefault();
             const formData = new FormData(form);
             const filters = Object.fromEntries(formData.entries());
@@ -439,58 +475,168 @@ const setupAnalyticsForm = (reportType) => {
                 const data = await window.uniformManager.getAnalyticsData(reportType, filters);
                 AnalyticsState[reportType] = data;
                 renderAnalytics(reportType, `content_analytics_${reportType}`, data);
-                btn.disabled = false;
+                if (btn) btn.disabled = false;
                 stopProgress();
-                toast("Analytics report generated.");
+                toast("Report generated successfully.");
             } catch (err) {
                 stopProgress();
-                showImportError(err.message || "Failed to generate analytics.");
+                showImportError(err.message || "Failed to generate report.");
             }
-        });
+        };
+        form.addEventListener('submit', form._submitHandler);
     }
 
     if (btn) {
-        btn.addEventListener('click', async () => {
+        // Prevent duplicate listener bindings
+        btn.removeEventListener('click', btn._clickHandler);
+        btn._clickHandler = async () => {
             const data = AnalyticsState[reportType];
-            if (!data || !data.table && !data.timeline) return toast("No data to export.");
+            if (!data) return toast("No data to export.");
 
-            const rawData = data.table || data.timeline;
-            const headers = ["Issue Date", "FY", "Month", "Employee Code", "Employee Name", "Unit", "Item", "Quantity", "Rate", "Amount", "Status", "Remarks"];
-            
-            const rows = rawData.map(r => [
-                r.issued_at ? r.issued_at.split('T')[0] : '',
-                r.financial_year || '', r.issue_month || '',
-                r.employee_code, r.employee_name, r.unit, r.item_name,
-                r.quantity, r.rate, r.amount, r.decision_status, r.remarks
-            ]);
+            let config;
 
-            const config = {
-                filename: `Analytics_${reportType.toUpperCase()}_Report.xlsx`,
-                sheetName: "Analytics Data",
-                reportTitle: `${reportType.toUpperCase()} ANALYTICS REPORT`,
-                filtersUsed: AnalyticsState.filters[reportType],
-                generatedDate: new Date().toISOString(),
-                summary: {
-                    "Total Employees": data.summary.total_employees,
-                    "Total Quantity": data.summary.total_quantity_issued,
-                    "Total Cost": data.summary.total_distribution_cost,
-                    "Recovery Amount": data.summary.total_recovery_amount
-                },
-                headers,
-                data: rows
-            };
+            // --- EXCEL LOGIC SPECIFIC TO PAYROLL SUMMARY ---
+            if (reportType === 'payroll_summary') {
+                const items = data.items || [];
+                const rowsData = data.rows || [];
+                if (!rowsData.length) return toast("No data to export.");
+
+                const headers = ["Sr No", "Employee Code", "Employee Name", "Unit Name", "Payroll Month", "Total Deduction Amount (Rs)"];
+                items.forEach(i => headers.push(i));
+                
+                const rows = rowsData.map(r => {
+                    const rowArr = [r.sr_no, r.employee_code, r.employee_name, r.unit, r.payroll_month, r.total_amount];
+                    items.forEach(i => rowArr.push(r.items[i] || 0)); // Missing items explicitly zeroed
+                    return rowArr;
+                });
+                
+                const periodStr = (AnalyticsState.filters[reportType].month || AnalyticsState.filters[reportType].fy) 
+                    ? `${AnalyticsState.filters[reportType].month || ''}_${AnalyticsState.filters[reportType].fy || ''}`.replace(/^_|_$/g, '') 
+                    : 'All_Periods';
+
+                config = {
+                    filename: `Payroll_Deduction_Summary_${periodStr}.xlsx`,
+                    sheetName: "Deduction Summary",
+                    reportTitle: `PAYROLL DEDUCTION SUMMARY - ${periodStr.replace('_', ' ').toUpperCase()}`,
+                    filtersUsed: AnalyticsState.filters[reportType],
+                    generatedDate: new Date().toISOString().replace('T', ' ').substring(0, 19),
+                    summary: {
+                        "Total Employees Deducted": rowsData.length,
+                        "Total Deduction Amount": `Rs. ${rowsData.reduce((sum, r) => sum + r.total_amount, 0).toFixed(2)}`
+                    },
+                    headers,
+                    data: rows
+                };
+
+            } else {
+                // EXCEL LOGIC FOR STANDARD REPORTS
+                if (!data.table && !data.timeline) return toast("No data to export.");
+
+                const rawData = data.table || data.timeline;
+                const headers = ["Issue Date", "FY", "Month", "Employee Code", "Employee Name", "Unit", "Item", "Quantity", "Rate", "Amount", "Status", "Remarks"];
+                
+                const rows = rawData.map(r => [
+                    r.issued_at ? r.issued_at.split('T')[0] : '',
+                    r.financial_year || '', r.issue_month || '',
+                    r.employee_code, r.employee_name, r.unit, r.item_name,
+                    r.quantity, r.rate, r.amount, r.decision_status, r.remarks
+                ]);
+
+                config = {
+                    filename: `Analytics_${reportType.toUpperCase()}_Report.xlsx`,
+                    sheetName: "Analytics Data",
+                    reportTitle: `${reportType.toUpperCase()} ANALYTICS REPORT`,
+                    filtersUsed: AnalyticsState.filters[reportType],
+                    generatedDate: new Date().toISOString().replace('T', ' ').substring(0, 19),
+                    summary: {
+                        "Total Employees": data.summary.total_employees,
+                        "Total Quantity": data.summary.total_quantity_issued,
+                        "Total Cost": data.summary.total_distribution_cost,
+                        "Recovery Amount": data.summary.total_recovery_amount
+                    },
+                    headers,
+                    data: rows
+                };
+            }
 
             try {
                 startProgress();
                 const res = await window.uniformManager.exportAnalyticsExcel(config);
                 stopProgress();
-                if (!res.canceled) toast("Analytics Excel exported successfully.");
+                if (!res.canceled) toast("Excel exported successfully.");
             } catch (err) {
                 stopProgress();
                 showImportError("Export failed: " + err.message);
             }
-        });
+        };
+        btn.addEventListener('click', btn._clickHandler);
     }
 };
 
-['monthly', 'yearly', 'unit', 'item', 'employee'].forEach(setupAnalyticsForm);
+// =====================================================================
+// DOM INJECTOR - AUTOMATICALLY BUILDS UI TO AVOID TOUCHING HTML FILE
+// =====================================================================
+document.addEventListener("DOMContentLoaded", () => {
+    
+    // 1. Inject the navigation link into the sidebar (above Monthly Report)
+    const monthlyNavLink = document.querySelector('[data-view="analytics_monthly"]');
+    if (monthlyNavLink && !document.querySelector('[data-view="analytics_payroll_summary"]')) {
+        const payrollLink = document.createElement('a');
+        payrollLink.href = "#";
+        payrollLink.setAttribute("data-view", "analytics_payroll_summary");
+        payrollLink.className = monthlyNavLink.className; 
+        payrollLink.textContent = "Payroll Deduction Summary";
+        monthlyNavLink.parentNode.insertBefore(payrollLink, monthlyNavLink);
+    }
+
+    // 2. Inject the entire Payroll Summary HTML View into the main container
+    const monthlyForm = document.getElementById('form_analytics_monthly');
+    const monthlyView = monthlyForm ? (monthlyForm.closest('div[id*="monthly"]') || monthlyForm.parentElement) : null;
+    
+    if (monthlyView && !document.getElementById('analytics_payroll_summary')) {
+        const payrollView = document.createElement('div');
+        payrollView.id = "analytics_payroll_summary";
+        payrollView.className = monthlyView.className; // Matches exact container class (e.g. view-section)
+        payrollView.style.display = "none";
+        
+        payrollView.innerHTML = `
+            <div class="panel-heading" style="margin-bottom: 24px;">
+                <h2 style="margin: 0; font-size: 24px;">Payroll Deduction Summary</h2>
+                <p style="color: var(--muted); margin-top: 4px;">Generate dynamic Excel exports for payroll deductions with live inventory columns.</p>
+            </div>
+            
+            <form id="form_analytics_payroll_summary" class="panel flush" style="padding: 18px; display: flex; gap: 12px; align-items: flex-end; margin-bottom: 24px;">
+                <label style="flex: 1; display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-weight: 600;">
+                    Financial Year
+                    <input type="number" name="fy" placeholder="e.g. 2026" style="padding: 8px; background: #111821; border: 1px solid var(--line); color: #fff; border-radius: 4px;">
+                </label>
+                <label style="flex: 1; display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-weight: 600;">
+                    Month
+                    <select name="month" style="padding: 8px; background: #111821; border: 1px solid var(--line); color: #fff; border-radius: 4px;">
+                        <option value="">All Months</option>
+                        <option value="1">January</option>
+                        <option value="2">February</option>
+                        <option value="3">March</option>
+                        <option value="4">April</option>
+                        <option value="5">May</option>
+                        <option value="6">June</option>
+                        <option value="7">July</option>
+                        <option value="8">August</option>
+                        <option value="9">September</option>
+                        <option value="10">October</option>
+                        <option value="11">November</option>
+                        <option value="12">December</option>
+                    </select>
+                </label>
+                <button type="submit" class="primary" style="padding: 8px 16px; height: 35px; cursor: pointer;">Generate Report</button>
+                <button type="button" id="btn_export_analytics_payroll_summary" class="secondary" style="padding: 8px 16px; height: 35px; cursor: pointer;" disabled>Export Excel</button>
+            </form>
+
+            <div id="content_analytics_payroll_summary"></div>
+        `;
+        monthlyView.parentElement.appendChild(payrollView);
+    }
+
+    // 3. Bind events for all forms now that they definitely exist in the DOM
+    ['payroll_summary', 'monthly', 'yearly', 'unit', 'item', 'employee'].forEach(setupAnalyticsForm);
+});

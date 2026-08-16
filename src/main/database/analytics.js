@@ -33,6 +33,7 @@ module.exports = ({ db, scalar, all }) => {
         
         let joinReviewQueue = `
             LEFT JOIN uniform_items itm ON lower(ui.item_name) = lower(itm.item_name)
+            LEFT JOIN unit_policies up ON lower(up.unit) = lower(ui.unit) AND lower(up.item_name) = lower(ui.item_name)
             LEFT JOIN review_queue_items rqi ON ui.id = rqi.uniform_issue_id AND COALESCE(rqi.is_active, 1) = 1
         `;
 
@@ -56,10 +57,10 @@ module.exports = ({ db, scalar, all }) => {
                 COUNT(DISTINCT ui.item_name) AS total_items_issued,
                 SUM(ui.quantity) AS total_quantity_issued,
                 COUNT(ui.id) AS total_transactions,
-                SUM(ui.quantity * COALESCE(itm.cost, 0)) AS total_distribution_cost,
-                SUM(CASE WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(itm.cost, 0) ELSE 0 END) AS total_recovery_amount,
-                SUM(CASE WHEN rqi.decision = 'Waive' THEN rqi.quantity * COALESCE(itm.cost, 0) ELSE 0 END) AS total_waived_amount,
-                SUM(CASE WHEN rqi.decision = 'Hold' THEN rqi.quantity * COALESCE(itm.cost, 0) ELSE 0 END) AS total_held_amount,
+                SUM(ui.quantity * COALESCE(up.item_cost, itm.cost, 0)) AS total_distribution_cost,
+                SUM(CASE WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(up.item_cost, itm.cost, 0) ELSE 0 END) AS total_recovery_amount,
+                SUM(CASE WHEN rqi.decision = 'Waive' THEN rqi.quantity * COALESCE(up.item_cost, itm.cost, 0) ELSE 0 END) AS total_waived_amount,
+                SUM(CASE WHEN rqi.decision = 'Hold' THEN rqi.quantity * COALESCE(up.item_cost, itm.cost, 0) ELSE 0 END) AS total_held_amount,
                 SUM(CASE WHEN rqi.decision = 'Pending' THEN rqi.quantity ELSE 0 END) AS pending_qty_count,
                 SUM(CASE WHEN rqi.decision = 'Deduct' THEN 1 ELSE 0 END) AS deduction_count,
                 SUM(CASE WHEN rqi.decision = 'Waive' THEN 1 ELSE 0 END) AS waiver_count,
@@ -81,8 +82,8 @@ module.exports = ({ db, scalar, all }) => {
                 ui.unit,
                 ui.item_name,
                 ui.quantity,
-                COALESCE(itm.cost, 0) AS rate,
-                (ui.quantity * COALESCE(itm.cost, 0)) AS amount,
+                COALESCE(up.item_cost, itm.cost, 0) AS rate,
+                (ui.quantity * COALESCE(up.item_cost, itm.cost, 0)) AS amount,
                 ui.issued_at,
                 ui.issue_year AS financial_year,
                 ui.issue_month,
@@ -97,7 +98,6 @@ module.exports = ({ db, scalar, all }) => {
         return all(query, params);
     }
 
-    // Generic function to pull live operational ledger data for all Decision Registers
     function getDecisionRegister(filters) {
         let where = "WHERE rqi.decision IN ('Deduct', 'Hold', 'Waive') AND COALESCE(rqi.is_active, 1) = 1";
         const params = [];
@@ -134,7 +134,7 @@ module.exports = ({ db, scalar, all }) => {
                 rqi.item_name,
                 rqi.quantity,
                 rqi.decision,
-                CASE WHEN rqi.decision = 'Deduct' THEN (rqi.quantity * COALESCE(ui_item.cost, rq.item_cost, 0)) ELSE 0 END AS deduction_amount,
+                CASE WHEN rqi.decision = 'Deduct' THEN (rqi.quantity * COALESCE(up.item_cost, rq.item_cost, 0)) ELSE 0 END AS deduction_amount,
                 rqi.reviewed_at AS review_date,
                 rqi.reviewed_by AS approved_by,
                 rqi.remarks,
@@ -142,17 +142,90 @@ module.exports = ({ db, scalar, all }) => {
             FROM review_queue_items rqi
             JOIN review_queue rq ON rq.id = rqi.review_queue_id
             LEFT JOIN employees e ON e.employee_code = rqi.employee_code
-            LEFT JOIN (
-                SELECT lower(item_name) AS search_name, MAX(cost) AS cost
-                FROM uniform_items
-                GROUP BY lower(item_name)
-            ) ui_item ON lower(rqi.item_name) = ui_item.search_name
+            LEFT JOIN unit_policies up ON lower(up.unit) = lower(COALESCE(rq.unit, e.unit, '')) AND lower(up.item_name) = lower(rqi.item_name)
             ${where}
             ORDER BY COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at) DESC, rqi.id DESC
         `, params);
     }
 
     return {
+        // --- NEW: GENERATES THE PIVOTED DATA NEEDED FOR THE NEW EXCEL REQUIREMENTS ---
+        getPayrollSummaryAnalytics(filters) {
+            let where = "WHERE rqi.decision = 'Deduct' AND COALESCE(rqi.is_active, 1) = 1";
+            const params = [];
+
+            if (filters.fy) {
+                where += " AND rq.issue_year = ?";
+                params.push(Number(filters.fy));
+            }
+            if (filters.month) {
+                where += " AND rq.issue_month = ?";
+                params.push(Number(filters.month));
+            }
+            
+            const query = `
+                SELECT 
+                    rqi.employee_code,
+                    COALESCE(e.employee_name, rq.employee_name, rqi.employee_code) AS employee_name,
+                    COALESCE(rq.unit, e.unit, '') AS unit,
+                    rq.issue_month,
+                    rq.issue_year,
+                    rqi.item_name,
+                    rqi.quantity,
+                    COALESCE(up.item_cost, itm.cost, 0) AS rate
+                FROM review_queue_items rqi
+                JOIN review_queue rq ON rq.id = rqi.review_queue_id
+                LEFT JOIN employees e ON e.employee_code = rqi.employee_code
+                LEFT JOIN uniform_items itm ON lower(rqi.item_name) = lower(itm.item_name)
+                LEFT JOIN unit_policies up ON lower(up.unit) = lower(COALESCE(rq.unit, e.unit, '')) AND lower(up.item_name) = lower(rqi.item_name)
+                ${where}
+                ORDER BY rqi.employee_code, rq.issue_year, rq.issue_month
+            `;
+
+            const deductions = all(query, params);
+            
+            const allItems = all("SELECT item_name FROM uniform_items ORDER BY item_name ASC").map(r => r.item_name);
+            const uniqueItems = new Set(allItems);
+            
+            const grouped = new Map();
+            deductions.forEach(row => {
+                uniqueItems.add(row.item_name);
+                
+                const monthNames = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+                const mName = row.issue_month ? monthNames[Number(row.issue_month)] : '';
+                const periodLabel = row.issue_year ? `${mName} ${row.issue_year}`.trim() : (mName || "Unknown");
+                
+                const key = `${row.employee_code}|${periodLabel}`;
+                
+                if (!grouped.has(key)) {
+                    grouped.set(key, {
+                        employee_code: row.employee_code,
+                        employee_name: row.employee_name,
+                        unit: row.unit,
+                        payroll_month: periodLabel,
+                        total_amount: 0,
+                        items: {}
+                    });
+                }
+                
+                const empData = grouped.get(key);
+                const qty = Number(row.quantity || 0);
+                const rate = Number(row.rate || 0);
+                
+                empData.items[row.item_name] = (empData.items[row.item_name] || 0) + qty;
+                empData.total_amount += (qty * rate);
+            });
+            
+            const itemsList = Array.from(uniqueItems).sort();
+            
+            const rows = Array.from(grouped.values()).map((row, index) => ({
+                sr_no: index + 1,
+                ...row
+            }));
+            
+            return { items: itemsList, rows };
+        },
+
         getMonthlyAnalytics(filters) {
             const { where, params, joinReviewQueue } = buildBaseFilter(filters);
             
@@ -190,8 +263,8 @@ module.exports = ({ db, scalar, all }) => {
                 SELECT 
                     COALESCE(ui.issue_month, 0) AS month_num,
                     SUM(ui.quantity) AS total_qty,
-                    SUM(ui.quantity * COALESCE(itm.cost, 0)) AS total_cost,
-                    SUM(CASE WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(itm.cost, 0) ELSE 0 END) AS total_recovery
+                    SUM(ui.quantity * COALESCE(up.item_cost, itm.cost, 0)) AS total_cost,
+                    SUM(CASE WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(up.item_cost, itm.cost, 0) ELSE 0 END) AS total_recovery
                 FROM uniform_issues ui ${joinReviewQueue} ${where}
                 GROUP BY ui.issue_month ORDER BY ui.issue_month ASC
             `, params);
@@ -210,7 +283,7 @@ module.exports = ({ db, scalar, all }) => {
             
             const summary = getSummaryCards(where, params, joinReviewQueue);
 
-            const itemWise = all(`SELECT ui.item_name AS label, SUM(ui.quantity) AS value, SUM(ui.quantity * COALESCE(itm.cost, 0)) AS cost FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY lower(ui.item_name) ORDER BY value DESC`, params);
+            const itemWise = all(`SELECT ui.item_name AS label, SUM(ui.quantity) AS value, SUM(ui.quantity * COALESCE(up.item_cost, itm.cost, 0)) AS cost FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY lower(ui.item_name) ORDER BY value DESC`, params);
             const topEmployees = all(`SELECT ui.employee_name AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY ui.employee_code ORDER BY value DESC LIMIT 20`, params);
 
             const table = getDetailedTable(where, params, joinReviewQueue);

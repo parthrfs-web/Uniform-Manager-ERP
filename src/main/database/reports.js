@@ -122,9 +122,9 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
           COALESCE(rq.unit, e.unit, '') AS unit,
           rqi.item_name,
           rqi.quantity,
-          COALESCE(ui.cost, rq.item_cost, 0) AS rate,
+          COALESCE(up.item_cost, rq.item_cost, 0) AS rate,
           CASE
-            WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(ui.cost, rq.item_cost, 0)
+            WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(up.item_cost, rq.item_cost, 0)
             ELSE 0
           END AS amount,
           COALESCE(rqi.remarks, rq.remarks, '') AS remarks,
@@ -138,11 +138,7 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         FROM review_queue_items rqi
         JOIN review_queue rq ON rq.id = rqi.review_queue_id
         LEFT JOIN employees e ON e.employee_code = rqi.employee_code
-        LEFT JOIN (
-          SELECT lower(item_name) AS search_name, MAX(cost) AS cost
-          FROM uniform_items
-          GROUP BY lower(item_name)
-        ) ui ON lower(rqi.item_name) = ui.search_name
+        LEFT JOIN unit_policies up ON lower(up.unit) = lower(COALESCE(rq.unit, e.unit, '')) AND lower(up.item_name) = lower(rqi.item_name)
         WHERE rqi.decision IN ('Deduct', 'Waive', 'Hold') AND COALESCE(rqi.is_active, 1) = 1
         ORDER BY COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at) DESC, rqi.id DESC
       `);
@@ -257,20 +253,16 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
               COALESCE(e.employee_name, rq.employee_name, rqi.employee_code) AS employee_name,
               rqi.item_name,
               rqi.quantity,
-              COALESCE(ui.cost, rq.item_cost, 0) AS rate,
+              COALESCE(up.item_cost, rq.item_cost, 0) AS rate,
               CASE
-                WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(ui.cost, rq.item_cost, 0)
+                WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(up.item_cost, rq.item_cost, 0)
                 ELSE 0
               END AS amount,
               COALESCE(rqi.remarks, rq.remarks, '') AS remarks
             FROM review_queue_items rqi
             JOIN review_queue rq ON rq.id = rqi.review_queue_id
             LEFT JOIN employees e ON e.employee_code = rqi.employee_code
-            LEFT JOIN (
-              SELECT lower(item_name) AS search_name, MAX(cost) AS cost
-              FROM uniform_items
-              GROUP BY lower(item_name)
-            ) ui ON lower(rqi.item_name) = ui.search_name
+            LEFT JOIN unit_policies up ON lower(up.unit) = lower(COALESCE(rq.unit, e.unit, '')) AND lower(up.item_name) = lower(rqi.item_name)
             WHERE rqi.decision IN ('Deduct', 'Waive', 'Hold') AND COALESCE(rqi.is_active, 1) = 1
             ORDER BY COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at) DESC, rqi.id DESC
         `);

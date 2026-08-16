@@ -15,13 +15,9 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
                 MAX(rq.unit) AS current_unit,
                 MAX(rq.issue_period_label) AS payroll_month,
                 COUNT(rq.id) AS pending_item_count,
-                SUM(rq.excess_qty * COALESCE(ui.cost, 0)) AS estimated_deduction
+                SUM(rq.excess_qty * COALESCE(up.item_cost, rq.item_cost, 0)) AS estimated_deduction
             FROM pending_reviews rq
-            LEFT JOIN (
-                SELECT lower(item_name) AS search_name, MAX(cost) AS cost
-                FROM uniform_items
-                GROUP BY lower(item_name)
-            ) ui ON lower(rq.item_name) = ui.search_name
+            LEFT JOIN unit_policies up ON lower(up.unit) = lower(rq.unit) AND lower(up.item_name) = lower(rq.item_name)
             GROUP BY rq.employee_code
             ORDER BY MAX(rq.created_at) DESC
         `);
@@ -30,16 +26,12 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         const rows = all(`
             SELECT 
                 rq.*,
-                COALESCE(ui.cost, 0) AS live_rate,
+                COALESCE(up.item_cost, rq.item_cost, 0) AS live_rate,
                 (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = rq.id AND decision = 'Deduct' AND COALESCE(is_active, 1) = 1) as sum_deduct,
                 (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = rq.id AND decision = 'Waive' AND COALESCE(is_active, 1) = 1) as sum_waive,
                 (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = rq.id AND decision = 'Hold' AND COALESCE(is_active, 1) = 1) as sum_hold
             FROM review_queue rq
-            LEFT JOIN (
-                SELECT lower(item_name) AS search_name, MAX(cost) AS cost
-                FROM uniform_items
-                GROUP BY lower(item_name)
-            ) ui ON lower(rq.item_name) = ui.search_name
+            LEFT JOIN unit_policies up ON lower(up.unit) = lower(rq.unit) AND lower(up.item_name) = lower(rq.item_name)
             WHERE rq.employee_code = ?
             ORDER BY CASE WHEN rq.status = 'Pending' THEN 0 ELSE 1 END, rq.created_at DESC
         `, [employeeCode]);
@@ -141,7 +133,10 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
 
             db.run("DELETE FROM salary_deductions WHERE review_id = ?", [Number(action.id)]);
             if (totalDeduct > 0) {
-                const liveCost = scalar("SELECT MAX(cost) FROM uniform_items WHERE lower(item_name) = lower(?)", [review.item_name]) || 0;
+                let liveCost = scalar("SELECT item_cost FROM unit_policies WHERE lower(unit) = lower(?) AND lower(item_name) = lower(?)", [review.unit || "", review.item_name]);
+                if (liveCost === undefined || liveCost === null) {
+                    liveCost = review.item_cost || 0;
+                }
                 const amount = totalDeduct * liveCost;
                 db.run(`INSERT INTO salary_deductions (review_id, employee_code, employee_name, unit, issue_month, issue_year, issue_period_label, amount, reason, status, created_at, approved_by, approval_date, remarks, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Payroll', ?, ?, ?, ?, 1)`,
                     [review.id, review.employee_code, review.employee_name, review.unit || "", review.issue_month || null, review.issue_year || null, review.issue_period_label || "", amount, action.reason, now(), approvedBy, now(), '']
@@ -231,7 +226,10 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
             const review = all("SELECT * FROM review_queue WHERE id = ?", [parentId])[0];
 
             if (totalDeduct > 0) {
-                const liveCost = scalar("SELECT MAX(cost) FROM uniform_items WHERE lower(item_name) = lower(?)", [review.item_name]) || 0;
+                let liveCost = scalar("SELECT item_cost FROM unit_policies WHERE lower(unit) = lower(?) AND lower(item_name) = lower(?)", [review.unit || "", review.item_name]);
+                if (liveCost === undefined || liveCost === null) {
+                    liveCost = review.item_cost || 0;
+                }
                 const amount = totalDeduct * liveCost;
                 
                 db.run(`INSERT INTO salary_deductions (review_id, employee_code, employee_name, unit, issue_month, issue_year, issue_period_label, amount, reason, status, created_at, approved_by, approval_date, remarks, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Payroll', ?, ?, ?, ?, 1)`,

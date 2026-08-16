@@ -14,7 +14,6 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1280, height: 820, minWidth: 1100, minHeight: 720,
     title: "Uniform Manager",
-    icon: path.join(__dirname, "../../build/icon.ico"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true, nodeIntegration: false,
@@ -409,8 +408,10 @@ ipcMain.handle("app:exportDecisionRegisterPdf", async (event, config) => {
     }
 });
 
+// ROUTING HOOK FOR THE NEW REPORT
 ipcMain.handle("app:getAnalyticsData", async (_event, request) => handleSafe(() => {
     const { reportType, filters } = request;
+    if (reportType === 'payroll_summary') return db.getPayrollSummaryAnalytics(filters);
     if (reportType === 'monthly') return db.getMonthlyAnalytics(filters);
     if (reportType === 'yearly') return db.getYearlyAnalytics(filters);
     if (reportType === 'unit') return db.getUnitWiseAnalytics(filters);
