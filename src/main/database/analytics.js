@@ -1,6 +1,5 @@
 module.exports = ({ db, scalar, all }) => {
 
-    // Performance Optimization: Create Indexes for Analytics
     db.run("CREATE INDEX IF NOT EXISTS idx_analytics_issues_period ON uniform_issues(issue_year, issue_month)");
     db.run("CREATE INDEX IF NOT EXISTS idx_analytics_issues_employee ON uniform_issues(employee_code)");
     db.run("CREATE INDEX IF NOT EXISTS idx_analytics_issues_unit ON uniform_issues(unit)");
@@ -103,11 +102,11 @@ module.exports = ({ db, scalar, all }) => {
         const params = [];
 
         if (filters.fy) {
-            where += " AND rq.issue_year = ?";
+            where += " AND CAST(rq.issue_year AS INTEGER) = ?";
             params.push(Number(filters.fy));
         }
         if (filters.month) {
-            where += " AND rq.issue_month = ?";
+            where += " AND CAST(rq.issue_month AS INTEGER) = ?";
             params.push(Number(filters.month));
         }
         if (filters.unit) {
@@ -149,51 +148,66 @@ module.exports = ({ db, scalar, all }) => {
     }
 
     return {
-        // --- NEW: GENERATES THE PIVOTED DATA NEEDED FOR THE NEW EXCEL REQUIREMENTS ---
+        // =========================================================
+        // STRICT PAYROLL DEDUCTION SUMMARY
+        // Retrieves exclusively DEDUCT records, grouping dynamically
+        // and accurately pulling historical policy costs.
+        // =========================================================
         getPayrollSummaryAnalytics(filters) {
             let where = "WHERE rqi.decision = 'Deduct' AND COALESCE(rqi.is_active, 1) = 1";
             const params = [];
 
             if (filters.fy) {
-                where += " AND rq.issue_year = ?";
+                // Strict CAST ensures exact matching, preventing SQLite loose type issues
+                where += " AND CAST(rq.issue_year AS INTEGER) = ?";
                 params.push(Number(filters.fy));
             }
             if (filters.month) {
-                where += " AND rq.issue_month = ?";
+                where += " AND CAST(rq.issue_month AS INTEGER) = ?";
                 params.push(Number(filters.month));
             }
-            
+
+            // Fetch raw finalized deduction records natively grouped
+            // COALESCE(up.item_cost, rq.item_cost, 0) mimics EXACTLY how the Payroll Register calculates total amount
             const query = `
                 SELECT 
                     rqi.employee_code,
-                    COALESCE(e.employee_name, rq.employee_name, rqi.employee_code) AS employee_name,
-                    COALESCE(rq.unit, e.unit, '') AS unit,
-                    rq.issue_month,
-                    rq.issue_year,
+                    COALESCE(MAX(e.employee_name), MAX(rq.employee_name), rqi.employee_code) AS employee_name,
+                    COALESCE(MAX(rq.unit), MAX(e.unit), '') AS unit,
+                    MAX(rq.issue_month) AS issue_month,
+                    MAX(rq.issue_year) AS issue_year,
+                    MAX(rq.issue_period_label) AS issue_period_label,
                     rqi.item_name,
-                    rqi.quantity,
-                    COALESCE(up.item_cost, itm.cost, 0) AS rate
+                    SUM(rqi.quantity) as quantity,
+                    COALESCE(MAX(up.item_cost), MAX(rq.item_cost), MAX(itm.cost), 0) AS rate
                 FROM review_queue_items rqi
                 JOIN review_queue rq ON rq.id = rqi.review_queue_id
                 LEFT JOIN employees e ON e.employee_code = rqi.employee_code
                 LEFT JOIN uniform_items itm ON lower(rqi.item_name) = lower(itm.item_name)
                 LEFT JOIN unit_policies up ON lower(up.unit) = lower(COALESCE(rq.unit, e.unit, '')) AND lower(up.item_name) = lower(rqi.item_name)
                 ${where}
+                GROUP BY rqi.employee_code, rq.issue_period_label, rq.issue_month, rq.issue_year, rqi.item_name
                 ORDER BY rqi.employee_code, rq.issue_year, rq.issue_month
             `;
 
             const deductions = all(query, params);
             
+            // Fetch ALL Registered Inventory Items dynamically to ensure dynamic columns exist
             const allItems = all("SELECT item_name FROM uniform_items ORDER BY item_name ASC").map(r => r.item_name);
             const uniqueItems = new Set(allItems);
             
+            // Group deeply by Employee + Payroll Month to flatten structure for columns
             const grouped = new Map();
             deductions.forEach(row => {
-                uniqueItems.add(row.item_name);
+                uniqueItems.add(row.item_name); 
                 
                 const monthNames = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
                 const mName = row.issue_month ? monthNames[Number(row.issue_month)] : '';
-                const periodLabel = row.issue_year ? `${mName} ${row.issue_year}`.trim() : (mName || "Unknown");
+                
+                let periodLabel = row.issue_period_label || "";
+                if (!periodLabel) {
+                    periodLabel = row.issue_year ? `${mName} ${row.issue_year}`.trim() : (mName || "Unknown");
+                }
                 
                 const key = `${row.employee_code}|${periodLabel}`;
                 
@@ -212,118 +226,63 @@ module.exports = ({ db, scalar, all }) => {
                 const qty = Number(row.quantity || 0);
                 const rate = Number(row.rate || 0);
                 
+                // Aggregate items and True Exact Total Amount
                 empData.items[row.item_name] = (empData.items[row.item_name] || 0) + qty;
-                empData.total_amount += (qty * rate);
+                empData.total_amount += (qty * rate); 
             });
             
             const itemsList = Array.from(uniqueItems).sort();
-            
-            const rows = Array.from(grouped.values()).map((row, index) => ({
-                sr_no: index + 1,
-                ...row
-            }));
+            const rows = Array.from(grouped.values()).map((row, index) => ({ sr_no: index + 1, ...row }));
             
             return { items: itemsList, rows };
         },
 
         getMonthlyAnalytics(filters) {
             const { where, params, joinReviewQueue } = buildBaseFilter(filters);
-            
             const summary = getSummaryCards(where, params, joinReviewQueue);
-            
-            const itemWise = all(`
-                SELECT ui.item_name AS label, SUM(ui.quantity) AS value
-                FROM uniform_issues ui ${joinReviewQueue} ${where}
-                GROUP BY lower(ui.item_name) ORDER BY value DESC
-            `, params);
-
-            const unitWise = all(`
-                SELECT COALESCE(ui.unit, 'Unknown') AS label, SUM(ui.quantity) AS value
-                FROM uniform_issues ui ${joinReviewQueue} ${where}
-                GROUP BY lower(ui.unit) ORDER BY value DESC LIMIT 10
-            `, params);
-
-            const topEmployees = all(`
-                SELECT ui.employee_name AS label, SUM(ui.quantity) AS value
-                FROM uniform_issues ui ${joinReviewQueue} ${where}
-                GROUP BY ui.employee_code ORDER BY value DESC LIMIT 10
-            `, params);
-
+            const itemWise = all(`SELECT ui.item_name AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY lower(ui.item_name) ORDER BY value DESC`, params);
+            const unitWise = all(`SELECT COALESCE(ui.unit, 'Unknown') AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY lower(ui.unit) ORDER BY value DESC LIMIT 10`, params);
+            const topEmployees = all(`SELECT ui.employee_name AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY ui.employee_code ORDER BY value DESC LIMIT 10`, params);
             const table = getDetailedTable(where, params, joinReviewQueue);
-
             return { summary, itemWise, unitWise, topEmployees, table, decisionRegister: getDecisionRegister(filters) };
         },
 
         getYearlyAnalytics(filters) {
             const { where, params, joinReviewQueue } = buildBaseFilter(filters);
-            
             const summary = getSummaryCards(where, params, joinReviewQueue);
-
-            const monthlyTrend = all(`
-                SELECT 
-                    COALESCE(ui.issue_month, 0) AS month_num,
-                    SUM(ui.quantity) AS total_qty,
-                    SUM(ui.quantity * COALESCE(up.item_cost, itm.cost, 0)) AS total_cost,
-                    SUM(CASE WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(up.item_cost, itm.cost, 0) ELSE 0 END) AS total_recovery
-                FROM uniform_issues ui ${joinReviewQueue} ${where}
-                GROUP BY ui.issue_month ORDER BY ui.issue_month ASC
-            `, params);
-
+            const monthlyTrend = all(`SELECT COALESCE(ui.issue_month, 0) AS month_num, SUM(ui.quantity) AS total_qty, SUM(ui.quantity * COALESCE(up.item_cost, itm.cost, 0)) AS total_cost, SUM(CASE WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(up.item_cost, itm.cost, 0) ELSE 0 END) AS total_recovery FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY ui.issue_month ORDER BY ui.issue_month ASC`, params);
             const itemWise = all(`SELECT ui.item_name AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY lower(ui.item_name) ORDER BY value DESC LIMIT 15`, params);
             const unitWise = all(`SELECT COALESCE(ui.unit, 'Unknown') AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY lower(ui.unit) ORDER BY value DESC LIMIT 15`, params);
             const topEmployees = all(`SELECT ui.employee_name AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY ui.employee_code ORDER BY value DESC LIMIT 15`, params);
-
             const table = getDetailedTable(where, params, joinReviewQueue);
-
             return { summary, monthlyTrend, itemWise, unitWise, topEmployees, table, decisionRegister: getDecisionRegister(filters) };
         },
 
         getUnitWiseAnalytics(filters) {
             const { where, params, joinReviewQueue } = buildBaseFilter(filters);
-            
             const summary = getSummaryCards(where, params, joinReviewQueue);
-
             const itemWise = all(`SELECT ui.item_name AS label, SUM(ui.quantity) AS value, SUM(ui.quantity * COALESCE(up.item_cost, itm.cost, 0)) AS cost FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY lower(ui.item_name) ORDER BY value DESC`, params);
             const topEmployees = all(`SELECT ui.employee_name AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY ui.employee_code ORDER BY value DESC LIMIT 20`, params);
-
             const table = getDetailedTable(where, params, joinReviewQueue);
-
             return { summary, itemWise, topEmployees, table, decisionRegister: getDecisionRegister(filters) };
         },
 
         getItemWiseAnalytics(filters) {
             const { where, params, joinReviewQueue } = buildBaseFilter(filters);
-            
             const summary = getSummaryCards(where, params, joinReviewQueue);
-
             const unitWise = all(`SELECT COALESCE(ui.unit, 'Unknown') AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY lower(ui.unit) ORDER BY value DESC LIMIT 20`, params);
             const monthlyTrend = all(`SELECT COALESCE(ui.issue_month, 0) AS month_num, SUM(ui.quantity) AS total_qty FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY ui.issue_month ORDER BY ui.issue_month ASC`, params);
             const topEmployees = all(`SELECT ui.employee_name AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY ui.employee_code ORDER BY value DESC LIMIT 20`, params);
-
             const table = getDetailedTable(where, params, joinReviewQueue);
-
             return { summary, unitWise, monthlyTrend, topEmployees, table, decisionRegister: getDecisionRegister(filters) };
         },
 
         getEmployeeWiseAnalytics(filters) {
             const { where, params, joinReviewQueue } = buildBaseFilter(filters);
-            
             const summary = getSummaryCards(where, params, joinReviewQueue);
-
             const itemWise = all(`SELECT ui.item_name AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY lower(ui.item_name) ORDER BY value DESC`, params);
-            
-            const timeline = all(`
-                SELECT 
-                    ui.issued_at,
-                    ui.item_name,
-                    ui.quantity,
-                    COALESCE(rqi.decision, 'OK') AS decision_status
-                FROM uniform_issues ui ${joinReviewQueue} ${where}
-                ORDER BY ui.issued_at DESC
-            `, params);
-
+            const timeline = all(`SELECT ui.issued_at, ui.item_name, ui.quantity, COALESCE(rqi.decision, 'OK') AS decision_status FROM uniform_issues ui ${joinReviewQueue} ${where} ORDER BY ui.issued_at DESC`, params);
             const table = getDetailedTable(where, params, joinReviewQueue);
-
             return { summary, itemWise, timeline, table, decisionRegister: getDecisionRegister(filters) };
         }
     };

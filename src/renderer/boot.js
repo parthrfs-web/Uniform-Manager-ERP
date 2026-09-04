@@ -16,9 +16,7 @@ const views = {
   analytics_unit: ["Unit Wise Analytics", "Pinpoint distribution costs, trends, and top items by client branch."],
   analytics_item: ["Item Wise Analytics", "Track inventory item distribution lifecycles globally."],
   analytics_employee: ["Employee Wise Analytics", "Review long-term history and costs attached to specific personnel."],
-
-  // Custom Reports
-  payroll_deduction_summary: ["Payroll Deduction Summary", "Excel-style matrix summary of finalized payroll deductions."]
+  analytics_payroll_summary: ["Payroll Deduction Summary", "Generate dynamic Excel exports for payroll deductions with live inventory columns."]
 };
 
 function setView(name) {

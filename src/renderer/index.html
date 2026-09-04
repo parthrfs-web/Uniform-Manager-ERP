@@ -40,6 +40,8 @@
         <button class="nav-button" data-view="analytics_unit">Unit Wise Report</button>
         <button class="nav-button" data-view="analytics_item">Item Wise Report</button>
         <button class="nav-button" data-view="analytics_employee">Employee Wise Report</button>
+        <!-- FIXED: Replaced <a> tag with proper nav-button for consistent styling and routing -->
+        <button class="nav-button" data-view="analytics_payroll_summary">Payroll Deduction Summary</button>
       </nav>
 
       <div class="sidebar-section-bottom">
@@ -62,6 +64,8 @@
         </div>
       </header>
 
+      
+      
       <!-- Dashboard View -->
       <section class="view active" id="dashboard">
         <div id="importError" class="error-panel"></div>
@@ -421,8 +425,6 @@
       </section>
 
       <!-- ANALYTICS MODULE SECTIONS -->
-      <!-- RESTORED: Monthly Report with standard <select> for fixed months -->
-      <!-- RESTORED: Employee Wise Report without smart picker for employee field -->
 
       <!-- Analytics: Monthly Report -->
       <section class="view" id="analytics_monthly">
@@ -431,7 +433,6 @@
                 <div class="primary-filters">
                     <input type="number" name="fy" data-smart-picker="fys" autocomplete="off" placeholder="Financial Year (e.g. 2026)" required />
                     
-                    <!-- RESTORED NATIVE MONTH SELECTOR -->
                     <select name="month" required>
                         <option value="">Select Month</option>
                         <option value="1">January</option><option value="2">February</option>
@@ -578,7 +579,7 @@
         <div id="content_analytics_item"></div>
       </section>
 
-      <!-- Analytics: Employee Wise Report (RESTORED TO ORIGINAL WITHOUT SMART PICKER) -->
+      <!-- Analytics: Employee Wise Report -->
       <section class="view" id="analytics_employee">
         <div class="panel flush" style="padding: 18px; margin-bottom: 18px; background: #131922;">
             <form id="form_analytics_employee" class="analytics-form">
@@ -615,6 +616,35 @@
             <button id="btn_export_analytics_employee" class="secondary" disabled>Export Excel</button>
         </div>
         <div id="content_analytics_employee"></div>
+      </section>
+
+      <!-- Analytics: Payroll Deduction Summary -->
+      <section class="view" id="analytics_payroll_summary">
+        <div class="panel flush" style="padding: 18px; margin-bottom: 18px; background: #131922;">
+          <form id="form_analytics_payroll_summary" class="analytics-form">
+            <div class="primary-filters">
+              <input type="number" name="fy" data-smart-picker="fys" autocomplete="off" placeholder="Financial Year (e.g. 2026)" required />
+              <select name="month" required>
+                <option value="">Select Month ▼</option>
+                <option value="1">January</option><option value="2">February</option>
+                <option value="3">March</option><option value="4">April</option>
+                <option value="5">May</option><option value="6">June</option>
+                <option value="7">July</option><option value="8">August</option>
+                <option value="9">September</option><option value="10">October</option>
+                <option value="11">November</option><option value="12">December</option>
+              </select>
+              <button type="submit" class="primary">Generate Report</button>
+            </div>
+          </form>
+        </div>
+        <div class="toolbar" style="justify-content: flex-end;">
+          <button id="btn_export_analytics_payroll_summary" class="secondary" disabled>Export Excel</button>
+        </div>
+        <div id="content_analytics_payroll_summary">
+          <div class="panel flush" style="padding: 32px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 6px;">
+            Select a Financial Year and Month, then click "Generate Report" to view finalized deductions.
+          </div>
+        </div>
       </section>
 
     </main>
