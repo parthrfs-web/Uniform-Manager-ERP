@@ -17,12 +17,12 @@
   ],
   "author": "Parth",
   "license": "ISC",
-    "files": [
-      "src/**/*",
-      "node_modules/**/*",
-      "package.json"
-    ],
-    "build": {
+  "files": [
+    "src/**/*",
+    "node_modules/**/*",
+    "package.json"
+  ],
+  "build": {
     "appId": "com.yourcompany.uniformmanager",
     "directories": {
       "buildResources": "build"

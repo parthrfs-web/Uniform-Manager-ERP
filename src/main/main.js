@@ -11,15 +11,23 @@ let db;
 let pendingImportCache = null; 
 
 function createWindow() {
-  const win = new BrowserWindow({
-    width: 1280, height: 820, minWidth: 1100, minHeight: 720,
-    title: "Uniform Manager",
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true, nodeIntegration: false,
-    },
-  });
-  win.loadFile(path.join(__dirname, "../renderer/index.html"));
+    const mainWindow = new BrowserWindow({
+        width: 1200,
+        height: 800,
+        title: "Uniform Manager",
+        
+        // Icon path matching the build folder from package.json
+        icon: path.join(__dirname, '../../build/icon.ico'), 
+        
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            nodeIntegration: false,
+            contextIsolation: true
+        }
+    });
+
+    // YEH LINE MISSING THI! Iske bina app HTML load hi nahi karega.
+    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 }
 
 app.whenReady().then(async () => {
