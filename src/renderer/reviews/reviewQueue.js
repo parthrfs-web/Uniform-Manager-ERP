@@ -115,14 +115,14 @@ window.openIndividualReviewModal = function(reviewId) {
        `;
        document.getElementById("indRevSaveBtn").disabled = true;
     } else {
-        const issuesHtml = (review.child_items || []).map((child, idx) => {
+        const issuesHtml = (review.child_items || []).map((child) => {
             const action = child.decision || 'Pending';
             const monthStr = child.issue_month ? monthNames[Number(child.issue_month)] : '-';
             
             return `
                 <div class="panel flush" style="margin-bottom: 16px;">
                     <div style="padding: 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; background: #131922;">
-                        <span style="font-weight: bold; font-size: 14px; color: var(--ink);">Issue #${idx + 1}</span>
+                        <span style="font-weight: bold; font-size: 14px; color: var(--ink);">${escapeHtml(review.unit || 'Unknown Unit')} — ${escapeHtml(review.item_name || 'Item')}</span>
                         <span style="color: var(--muted); font-size: 13px;">${child.issue_date ? child.issue_date.split('T')[0] : '-'}</span>
                     </div>
                     <div style="padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px; background: var(--panel);">
@@ -210,15 +210,37 @@ window.updateIndividualReviewSummary = function(reviewId) {
 };
 
 window.closeIndividualReviewModal = function() {
+    const wasOpen = document.getElementById("individualReviewModal").classList.contains("show");
     pendingReviewDecision = null;
     document.getElementById("individualReviewModal").classList.remove("show");
+    if (wasOpen && currentEmpData && selectedReviewEmployee) {
+        document.getElementById("reviewStage1").style.display = "none";
+        document.getElementById("reviewStage2").style.display = "block";
+        refreshReviewEmployeeSummary();
+    }
 };
 
+async function refreshReviewEmployeeSummary() {
+    const employeeCode = selectedReviewEmployee;
+    if (!employeeCode || !currentEmpData) return;
+    try {
+        summaryCache = await window.uniformManager.getReviewQueueStage1();
+        const refreshed = summaryCache.find((employee) => String(employee.employee_code) === String(employeeCode));
+        currentEmpData = refreshed || { ...currentEmpData, pending_item_count: 0, estimated_deduction: 0 };
+        document.getElementById("stg2Count").textContent = text(currentEmpData.pending_item_count || 0);
+        document.getElementById("stg2Amount").textContent = `₹${Number(currentEmpData.estimated_deduction || 0).toFixed(2)}`;
+        await loadReviewStage2(currentEmpData);
+    } catch (error) {
+        showImportError(error.message || "Failed to refresh the review summary.");
+    }
+}
+
 window.openItemReviewModal = function(...reviewIds) {
-    const reviews = (currentStage2Items || []).filter((review) => reviewIds.map(String).includes(String(review.id)) && review.status === 'Pending');
+    const requestedIds = reviewIds.map(String);
+    const reviews = (currentStage2Items || []).filter((review) => requestedIds.includes(String(review.id)) && Number(review.remaining_qty ?? review.excess_qty ?? 0) > 0);
     if (!reviews.length) return;
 
-    pendingReviewDecision = { reviews };
+    pendingReviewDecision = { reviews, reviewIds: requestedIds };
     const firstReview = reviews[0];
     const issuedQty = reviews.reduce((sum, review) => sum + Number(review.issued_qty || 0), 0);
     const allowedQty = reviews.some((review) => review.allowed_qty === null) ? 'No Policy' : reviews.reduce((sum, review) => sum + Number(review.allowed_qty || 0), 0);
@@ -254,29 +276,54 @@ window.openItemReviewModal = function(...reviewIds) {
         const issued = Number(review.issued_qty || 0);
         const allowed = review.allowed_qty !== null ? Number(review.allowed_qty) : 'No Policy';
         const excess = Number(review.excess_qty || 0);
+        const distributionDates = [...new Set((review.child_items || []).map((child) => child.issue_date).filter(Boolean).map((date) => String(date).split('T')[0]))];
+        const previouslyDeducted = Number(review.sum_deduct || 0);
+        const previouslyWaived = Number(review.sum_waive || 0);
+        const previouslyHeld = Number(review.sum_hold || 0);
+        const remainingQty = Math.max(0, Number(review.remaining_qty ?? (excess - previouslyDeducted - previouslyWaived - previouslyHeld)));
+
+        const quickActions = remainingQty === 1
+            ? `<button type="button" class="secondary" onclick="saveItemReviewDecision(${review.id}, 'Deduct')">Deduct</button>
+               <button type="button" class="secondary" onclick="saveItemReviewDecision(${review.id}, 'Waive')">Waive</button>
+               <button type="button" class="secondary" onclick="saveItemReviewDecision(${review.id}, 'Hold')">Hold</button>`
+            : `<button type="button" class="secondary" onclick="saveItemReviewDecision(${review.id}, 'Deduct')">Deduct All</button>
+               <button type="button" class="secondary" onclick="saveItemReviewDecision(${review.id}, 'Waive')">Waive All</button>
+               <button type="button" class="secondary" onclick="saveItemReviewDecision(${review.id}, 'Hold')">Hold All</button>
+               <button type="button" class="secondary" onclick="toggleReviewSplit(${review.id}, true)">Split Decision</button>`;
 
         return `
             <div class="panel flush" style="margin-bottom: 16px;">
                 <div style="padding: 16px; border-bottom: 1px solid var(--line); background: #131922; display: flex; justify-content: space-between; align-items: center;">
                     <span style="font-weight: bold; font-size: 15px; color: var(--ink);">${escapeHtml(unitName)} — ${escapeHtml(itemName)}</span>
+                    ${distributionDates.length ? `<span style="color: var(--muted); font-size: 12px;">Distribution${distributionDates.length > 1 ? ' dates' : ' date'}: ${escapeHtml(distributionDates.join(', '))}</span>` : ''}
                 </div>
                 <div style="padding: 16px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; font-size: 13px; background: var(--panel);">
                     <div><span style="color: var(--muted); display: block; margin-bottom: 4px;">Issued Quantity</span><strong style="font-size: 16px;">${issued}</strong></div>
                     <div><span style="color: var(--muted); display: block; margin-bottom: 4px;">Allowed Quantity</span><strong style="font-size: 16px;">${allowed}</strong></div>
-                    <div><span style="color: var(--muted); display: block; margin-bottom: 4px;">Excess Quantity</span><strong class="text-amber" style="font-size: 16px;">${excess}</strong></div>
+                    <div><span style="color: var(--muted); display: block; margin-bottom: 4px;">Original Excess Quantity</span><strong class="text-amber" style="font-size: 16px;">${excess}</strong></div>
                 </div>
                 <div style="padding: 16px; border-top: 1px solid var(--line); background: #0f141b;">
-                    <div style="margin-bottom: 14px; display: flex; align-items: center; flex-wrap: wrap; font-size: 14px; font-weight: 600;">
-                        <span style="color: var(--muted); margin-right: 16px;">Decision:</span>
-                        <label style="margin-right: 16px; cursor: pointer;"><input type="radio" name="group_action_${review.id}" value="Deduct" onchange="updateGroupedReviewSummary()"> <span class="text-red">Deduct</span></label>
-                        <label style="margin-right: 16px; cursor: pointer;"><input type="radio" name="group_action_${review.id}" value="Waive" onchange="updateGroupedReviewSummary()"> <span class="text-green">Waive</span></label>
-                        <label style="cursor: pointer;"><input type="radio" name="group_action_${review.id}" value="Hold" onchange="updateGroupedReviewSummary()"> <span class="text-blue">Hold</span></label>
+                    <div style="display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-bottom: 14px;">
+                        <span>Previously deducted: <strong class="text-red">${previouslyDeducted}</strong></span>
+                        <span>Previously waived: <strong class="text-green">${previouslyWaived}</strong></span>
+                        <span>Previously held: <strong class="text-blue">${previouslyHeld}</strong></span>
+                        <span>Remaining undecided: <strong id="group_remaining_${review.id}" class="text-amber">${remainingQty}</strong></span>
                     </div>
-                    <input type="text" id="group_remarks_${review.id}" placeholder="Optional justification" style="width: 100%; box-sizing: border-box; padding: 8px 12px; font-size: 13px; background: #111821; color: #fff; border: 1px solid var(--line); border-radius: 4px;">
+                    ${remainingQty > 0 ? `<div id="group_quick_${review.id}" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">${quickActions}</div>` : '<div style="color:var(--muted); margin-bottom:14px;">All excess quantity has been processed.</div>'}
+                    <div id="group_split_${review.id}" style="display:none;">
+                    <div style="display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 12px; margin-bottom: 14px;">
+                        <label class="text-red">Deduct Quantity<input type="number" id="group_deduct_${review.id}" min="0" step="1" value="0" oninput="updateGroupedReviewSummary()" style="display:block; width:100%; box-sizing:border-box; margin-top:6px; padding:8px 10px; background:#111821; color:#fff; border:1px solid var(--line); border-radius:4px;"></label>
+                        <label class="text-green">Waive Quantity<input type="number" id="group_waive_${review.id}" min="0" step="1" value="0" oninput="updateGroupedReviewSummary()" style="display:block; width:100%; box-sizing:border-box; margin-top:6px; padding:8px 10px; background:#111821; color:#fff; border:1px solid var(--line); border-radius:4px;"></label>
+                        <label class="text-blue">Hold Quantity<input type="number" id="group_hold_${review.id}" min="0" step="1" value="0" oninput="updateGroupedReviewSummary()" style="display:block; width:100%; box-sizing:border-box; margin-top:6px; padding:8px 10px; background:#111821; color:#fff; border:1px solid var(--line); border-radius:4px;"></label>
+                    </div>
+                    <div id="group_validation_${review.id}" style="font-size:12px; color:var(--muted); margin-bottom:10px;">Allocate all ${remainingQty} remaining units to save.</div>
                     <div style="margin-top: 12px;">
-                        <button type="button" class="primary" onclick="saveItemReviewDecision(${review.id})">Save</button>
+                        <button type="button" class="primary" id="group_save_${review.id}" onclick="saveItemReviewDecision(${review.id})" ${remainingQty === 0 ? 'disabled' : ''}>Save Split Decision</button>
+                        <button type="button" class="secondary" onclick="toggleReviewSplit(${review.id}, false)">Cancel Split</button>
                         <span id="group_save_msg_${review.id}" style="margin-left: 10px; color: var(--muted); font-size: 13px;"></span>
                     </div>
+                    </div>
+                    ${remainingQty > 0 ? `<input type="text" id="group_remarks_${review.id}" placeholder="Optional justification" style="width: 100%; box-sizing: border-box; padding: 8px 12px; font-size: 13px; background: #111821; color: #fff; border: 1px solid var(--line); border-radius: 4px;">` : ''}
                 </div>
             </div>
         `;
@@ -287,6 +334,7 @@ window.openItemReviewModal = function(...reviewIds) {
     document.getElementById("indRevApprovedBy").disabled = false;
     document.getElementById("indRevSaveBtn").style.display = 'none';
     document.getElementById("indRevSaveMsg").textContent = "";
+    document.getElementById("indRevSaveBtn").style.display = 'inline-block';
     window.updateGroupedReviewSummary();
     document.getElementById("individualReviewModal").classList.add("show");
 };
@@ -299,62 +347,200 @@ window.updateGroupedReviewSummary = function() {
     let recoveryAmount = 0;
 
     reviews.forEach((review) => {
-        const action = Array.from(document.getElementsByName(`group_action_${review.id}`)).find((radio) => radio.checked)?.value || 'Pending';
-        const quantity = Number(review.excess_qty || 0);
-        
-        if (action === 'Deduct') {
-            deductQty += quantity;
-            recoveryAmount += quantity * Number(review.live_rate !== undefined ? review.live_rate : (review.item_cost || 0));
-        } else if (action === 'Waive') waiveQty += quantity;
-        else if (action === 'Hold') holdQty += quantity;
+        const values = ['deduct', 'waive', 'hold'].map((kind) => document.getElementById(`group_${kind}_${review.id}`)?.value ?? '0');
+        const quantities = values.map((value) => value === '' ? NaN : Number(value));
+        const selected = quantities.reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
+        const remaining = Math.max(0, Number(review.remaining_qty ?? review.excess_qty));
+        const validWhole = quantities.every((value) => Number.isInteger(value) && value >= 0);
+        const valid = validWhole && selected === remaining && remaining > 0;
+        const validation = document.getElementById(`group_validation_${review.id}`);
+        const saveButton = document.getElementById(`group_save_${review.id}`);
+        if (validation) validation.textContent = remaining === 0 ? 'Completed: all excess quantity has been processed.' : (!validWhole ? 'Enter non-negative whole numbers only.' : (selected > remaining ? `Selected total exceeds the ${remaining} remaining units.` : (selected < remaining ? `${remaining - selected} excess quantity remains undecided.` : 'Ready to save.')));
+        if (saveButton) saveButton.disabled = !valid;
+        if (validWhole) {
+            deductQty += quantities[0];
+            waiveQty += quantities[1];
+            holdQty += quantities[2];
+            recoveryAmount += quantities[0] * Number(review.live_rate !== undefined ? review.live_rate : (review.item_cost || 0));
+        }
+        const remainingLabel = document.getElementById(`group_remaining_${review.id}`);
+        if (remainingLabel && validWhole) {
+            const unallocated = remaining - selected;
+            remainingLabel.textContent = unallocated < 0 ? `Over by ${Math.abs(unallocated)}` : String(unallocated);
+        }
     });
 
     document.getElementById("indRevCalculatedTotals").innerHTML = `<div><span style="color: var(--muted); margin-right: 8px;">Total Deduct Qty:</span> <strong class="text-red">${deductQty}</strong></div><div><span style="color: var(--muted); margin-right: 8px;">Total Waive Qty:</span> <strong class="text-green">${waiveQty}</strong></div><div><span style="color: var(--muted); margin-right: 8px;">Total Hold Qty:</span> <strong class="text-blue">${holdQty}</strong></div><div><span style="color: var(--muted); margin-right: 8px;">Total Recovery Amount:</span> <strong class="text-red">₹${recoveryAmount.toFixed(2)}</strong></div>`;
-    const decided = deductQty + waiveQty + holdQty;
-    document.getElementById("indRevSaveMsg").textContent = decided === 0 ? "Select a decision for a review below." : "";
+    if (reviews.length) document.getElementById("indRevSaveMsg").textContent = "Each card must allocate its full remaining undecided quantity before saving.";
 };
 
-window.saveItemReviewDecision = async function(reviewId) {
+function renderReviewSession() {
+    const ids = pendingReviewDecision?.reviewIds || [];
+    const pending = (currentStage2Items || []).filter((review) => ids.includes(String(review.id)) && Number(review.remaining_qty ?? review.excess_qty ?? 0) > 0);
+    if (pending.length) {
+        window.openItemReviewModal(...pending.map((review) => review.id));
+        return;
+    }
+    pendingReviewDecision = { reviews: [], reviewIds: ids };
+    document.getElementById("indRevTitle").textContent = "Review Excess Transactions";
+    const employee = currentEmpData || currentStage2Items[0] || {};
+    document.getElementById("indRevSubtitle").textContent = `${employee.employee_code || ''} - ${employee.employee_name || ''} | Review session`;
+    document.getElementById("indRevSummary").innerHTML = '<article style="background:var(--panel);padding:14px;border:1px solid var(--line);border-radius:6px;"><span style="color:var(--muted);font-size:12px;">Session Status</span><strong class="text-green" style="display:block;font-size:20px;margin-top:4px;">Completed</strong></article>';
+    document.getElementById("indRevTransactions").innerHTML = '<div class="panel" style="padding:18px;color:var(--green);font-weight:600;">All reviews completed. You can close this window when ready.</div>';
+    document.getElementById("indRevCalculatedTotals").innerHTML = '<div class="text-green" style="font-weight:600;">All selected review quantities have been processed.</div>';
+    document.getElementById("indRevSaveMsg").textContent = "All reviews completed. Close this window when ready.";
+    document.getElementById("indRevSaveBtn").style.display = 'none';
+    document.getElementById("individualReviewModal").classList.add("show");
+}
+
+window.toggleReviewSplit = function(reviewId, show) {
+    const split = document.getElementById(`group_split_${reviewId}`);
+    const quick = document.getElementById(`group_quick_${reviewId}`);
+    if (split) split.style.display = show ? 'block' : 'none';
+    if (quick) quick.style.display = show ? 'none' : 'flex';
+    if (!show) {
+        ['deduct', 'waive', 'hold'].forEach((kind) => {
+            const input = document.getElementById(`group_${kind}_${reviewId}`);
+            if (input) input.value = '0';
+        });
+        const msg = document.getElementById(`group_save_msg_${reviewId}`);
+        if (msg) msg.textContent = '';
+        window.updateGroupedReviewSummary();
+    }
+};
+
+window.saveItemReviewDecision = async function(reviewId, quickDecision = null) {
     if (!desktopApi || !pendingReviewDecision?.reviews) return;
     const review = pendingReviewDecision.reviews.find((row) => String(row.id) === String(reviewId));
     if (!review) return;
+    if (document.getElementById("indRevApprovedBy").value.trim() === '' || document.getElementById("indRevGeneralReason").value.trim() === '') {
+        document.getElementById("indRevSaveMsg").textContent = 'Enter the approval name and general reason before saving.';
+        return;
+    }
 
-    const action = Array.from(document.getElementsByName(`group_action_${review.id}`)).find((radio) => radio.checked)?.value || 'Pending';
-    if (action === 'Pending') {
+    const remainingQty = Math.max(0, Number(review.remaining_qty ?? review.excess_qty));
+    const quantities = { deduct: 0, waive: 0, hold: 0 };
+    if (quickDecision) {
+        const key = String(quickDecision).toLowerCase();
+        if (!['deduct', 'waive', 'hold'].includes(key) || remainingQty < 1) return;
+        quantities[key] = remainingQty;
+    } else {
+        quantities.deduct = document.getElementById(`group_deduct_${review.id}`)?.value;
+        quantities.waive = document.getElementById(`group_waive_${review.id}`)?.value;
+        quantities.hold = document.getElementById(`group_hold_${review.id}`)?.value;
+    }
+    const nums = Object.values(quantities).map((value) => value === '' ? NaN : Number(value));
+    const total = nums.reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
+    const remaining = Number(review.remaining_qty ?? review.excess_qty);
+    if (nums.some((value) => !Number.isInteger(value) || value < 0) || total !== remaining) {
         const msg = document.getElementById(`group_save_msg_${review.id}`);
-        if (msg) msg.textContent = "Select Deduct, Waive, or Hold.";
+        if (msg) msg.textContent = total > remaining ? 'Selected quantity exceeds the remaining excess.' : `${Math.max(0, remaining - total)} quantity remains undecided.`;
         return;
     }
 
     try {
-        const issueDecisions = (review.child_items || []).map(child => ({
-            id: child.id,
-            decision: action,
-            remarks: document.getElementById(`group_remarks_${review.id}`)?.value || '',
-            quantity: child.quantity
-        }));
-
         await window.uniformManager.updateReview({
             id: review.id,
             approved_by: document.getElementById("indRevApprovedBy").value,
             reason: document.getElementById("indRevGeneralReason").value,
-            issue_decisions: issueDecisions,
-            status: 'Completed'
+            quantity_decisions: Object.fromEntries(Object.entries(quantities).map(([kind, value]) => [kind, Number(value)])),
+            remarks: document.getElementById(`group_remarks_${review.id}`)?.value || '',
+            status: 'Completed',
         });
         state = await window.uniformManager.getState({ distributionLimit });
         if (typeof renderDeductions === "function") renderDeductions();
-        pendingReviewDecision.reviews = pendingReviewDecision.reviews.filter((row) => String(row.id) !== String(review.id));
-        await loadReviewStage2(currentEmpData);
-        if (pendingReviewDecision.reviews.length) {
-            openItemReviewModal(...pendingReviewDecision.reviews.map((row) => row.id));
-        } else {
-            closeIndividualReviewModal();
-        }
+        const sessionIds = pendingReviewDecision.reviewIds || pendingReviewDecision.reviews.map((row) => String(row.id));
+        await loadReviewStage2(currentEmpData, { preserveModal: true });
+        pendingReviewDecision = { reviews: [], reviewIds: sessionIds };
+        renderReviewSession();
         toast("Review decision saved.");
     } catch (error) {
         showImportError(error.message || "Review decision failed.");
     }
 };
+
+window.openManageHoldModal = function(...reviewIds) {
+    const heldItems = (currentStage2Items || []).flatMap((review) => {
+        if (!reviewIds.map(String).includes(String(review.id))) return [];
+        return (review.child_items || [])
+            .filter((child) => Number(child.held_quantity || 0) > 0)
+            .map((child) => ({ review, child }));
+    });
+    if (!heldItems.length) return toast('No held quantity remains. Refresh the Review Queue.');
+
+    const employee = heldItems[0].review;
+    const overallHeld = heldItems.reduce((sum, { child }) => sum + Number(child.held_quantity || 0), 0);
+    document.getElementById('manageHoldDetails').innerHTML = `
+        <div style="color:var(--muted); margin-bottom:12px;">${escapeHtml(employee.employee_code)} — ${escapeHtml(employee.employee_name)} · ${escapeHtml(employee.item_name)}</div>
+        ${heldItems.map(({ review, child }) => `
+          <article class="panel flush" style="padding:12px; margin:10px 0;">
+            <div><strong>${escapeHtml(review.unit || 'Unknown Unit')}</strong> · ${child.issue_date ? escapeHtml(String(child.issue_date).split('T')[0]) : 'No distribution date'} · Transaction #${Number(child.id)}</div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(115px,1fr)); gap:8px; margin-top:10px; font-size:12px;">
+              <span>Original excess: <strong>${Number(review.excess_qty || 0)}</strong></span>
+              <span>Deducted: <strong class="text-red">${Number(review.sum_deduct || 0)}</strong></span>
+              <span>Waived: <strong class="text-green">${Number(review.sum_waive || 0)}</strong></span>
+              <span>Held here: <strong class="text-blue">${Number(child.held_quantity || 0)}</strong></span>
+              <span>Item held total: <strong class="text-blue">${overallHeld}</strong></span>
+              <span>Remaining undecided: <strong class="text-amber">${Number(child.remaining_quantity || 0)}</strong></span>
+            </div>
+          </article>`).join('')}
+    `;
+    const form = document.getElementById('manageHoldForm');
+    const selected = heldItems[0];
+    document.getElementById('manageHoldReviewId').value = selected.review.id;
+    document.getElementById('manageHoldItemId').value = selected.child.id;
+    const quantityInput = document.getElementById('manageHoldQuantity');
+    quantityInput.max = String(Number(selected.child.held_quantity));
+    quantityInput.value = String(Number(selected.child.held_quantity));
+    document.getElementById('manageHoldReason').value = '';
+    form.dataset.heldItems = JSON.stringify(heldItems.map(({ review, child }) => ({ reviewId: review.id, itemId: child.id, max: Number(child.held_quantity) })));
+    const modal = document.getElementById('manageHoldModal');
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+};
+
+window.closeManageHoldModal = function() {
+    const modal = document.getElementById('manageHoldModal');
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+    document.getElementById('manageHoldReviewId').value = '';
+    document.getElementById('manageHoldItemId').value = '';
+    document.getElementById('manageHoldDetails').innerHTML = '';
+    document.getElementById('manageHoldReason').value = '';
+};
+document.getElementById('closeManageHoldModal')?.addEventListener('click', window.closeManageHoldModal);
+document.getElementById('manageHoldModal')?.addEventListener('click', (event) => {
+    if (event.target.id === 'manageHoldModal') window.closeManageHoldModal();
+});
+document.getElementById('manageHoldForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submitter = event.submitter;
+    const decision = submitter?.dataset.holdResolution;
+    const reviewId = Number(document.getElementById('manageHoldReviewId').value);
+    const itemId = Number(document.getElementById('manageHoldItemId').value);
+    const quantity = Number(document.getElementById('manageHoldQuantity').value);
+    const max = Number(document.getElementById('manageHoldQuantity').max);
+    const reason = document.getElementById('manageHoldReason').value.trim();
+    if (!['Deduct', 'Waive', 'Hold'].includes(decision)) return;
+    if (!Number.isInteger(quantity) || quantity <= 0 || quantity > max) return toast(`Enter a whole quantity between 1 and ${max}.`);
+    if (!reason) return toast('A reason is required.');
+    try {
+        startProgress();
+        state = await window.uniformManager.resolveHeldQuantity({ reviewId, itemId, quantity, decision, reason, resolvedBy: 'Admin' });
+        stopProgress();
+        window.closeManageHoldModal();
+        if (currentEmpData) await loadReviewStage2(currentEmpData);
+        if (typeof renderDeductions === 'function') renderDeductions();
+        if (typeof window.renderCorrectionCentre === 'function') window.renderCorrectionCentre();
+        if (typeof window.renderCorrectionHistory === 'function') window.renderCorrectionHistory();
+        toast('Held quantity updated and recorded in correction history.');
+    } catch (error) {
+        stopProgress();
+        showImportError(error.message || 'Failed to resolve held quantity.');
+    }
+});
+
 document.getElementById("individualReviewForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!desktopApi || !pendingReviewDecision) return;
@@ -405,16 +591,19 @@ document.getElementById("individualReviewForm")?.addEventListener("submit", asyn
         
         await window.uniformManager.updateReview(payload);
         state = await window.uniformManager.getState({ distributionLimit });
-        
-        render();
-        closeIndividualReviewModal();
+        const sessionIds = pendingReviewDecision.reviewIds || [String(review.id)];
+        await loadReviewStage2(currentEmpData, { preserveModal: true });
+        pendingReviewDecision = { reviews: [], reviewIds: sessionIds };
+        renderReviewSession();
         toast(`Decisions explicitly saved for Review #${review.id}.`);
     } catch (error) {
         showImportError(error.message || "Review decision failed.");
     }
 });
 
-async function loadReviewStage2(emp) {
+async function loadReviewStage2(emp, { preserveModal = false } = {}) {
+  const reviewModal = document.getElementById("individualReviewModal");
+  const modalWasOpen = reviewModal?.classList.contains("show");
   selectedReviewEmployee = emp.employee_code;
   currentEmpData = emp;
   document.getElementById("reviewStage1").style.display = "none";
@@ -439,7 +628,8 @@ async function loadReviewStage2(emp) {
 
     const reviewRows = currentStage2Items;
     reviewRows.forEach((row) => {
-      const status = row.status || "Pending";
+      const remaining = Math.max(0, Number(row.remaining_qty ?? row.excess_qty ?? 0));
+      const status = remaining > 0 ? "Pending" : (Number(row.sum_hold || 0) > 0 ? "Held" : "Completed");
       const rate = Number(row.live_rate !== undefined ? row.live_rate : (row.item_cost || 0));
       const amount = Number(row.sum_deduct || 0) * rate;
       if (counts[status] !== undefined) counts[status]++;
@@ -456,7 +646,9 @@ async function loadReviewStage2(emp) {
 
     const groupedReviewItems = Array.from(itemGroups.values()).map((rows) => {
       const firstRow = rows[0];
-      const pendingRows = rows.filter((row) => (row.status || "Pending") === "Pending");
+      const pendingRows = rows.filter((row) => Math.max(0, Number(row.remaining_qty ?? row.excess_qty ?? 0)) > 0);
+      const heldQty = rows.reduce((sum, row) => sum + Number(row.sum_hold || 0), 0);
+      const remainingQty = rows.reduce((sum, row) => sum + Math.max(0, Number(row.remaining_qty ?? row.excess_qty ?? 0)), 0);
       const reviewAmount = rows.reduce((sum, row) => {
         const rate = Number(row.live_rate !== undefined ? row.live_rate : (row.item_cost || 0));
         return sum + (Number(row.sum_deduct || 0) * rate);
@@ -464,7 +656,7 @@ async function loadReviewStage2(emp) {
 
       return {
         ...firstRow,
-        status: pendingRows.length ? "Pending" : (firstRow.status || "Completed"),
+        status: remainingQty > 0 ? "Pending" : (heldQty > 0 ? "Held" : "Completed"),
         issued_qty: rows.reduce((sum, row) => sum + Number(row.issued_qty || 0), 0),
         allowed_qty: rows.some((row) => row.allowed_qty === null) ? null : rows.reduce((sum, row) => sum + Number(row.allowed_qty || 0), 0),
         excess_qty: rows.reduce((sum, row) => sum + Number(row.excess_qty || 0), 0),
@@ -493,10 +685,15 @@ async function loadReviewStage2(emp) {
       
       const amount = row.reviewAmount;
       
-      const pendingReviewCount = row.reviewRows.filter((review) => (review.status || 'Pending') === 'Pending').length;
-      const reviewIds = row.reviewRows.map((review) => review.id).join(', ');
+      const pendingReviewRows = row.reviewRows.filter((review) => Math.max(0, Number(review.remaining_qty ?? review.excess_qty ?? 0)) > 0);
+      const pendingReviewCount = pendingReviewRows.length;
+      const heldRows = row.reviewRows.filter((review) => Number(review.sum_hold || 0) > 0 && (review.child_items || []).some((child) => Number(child.held_quantity || 0) > 0));
+      const reviewIds = pendingReviewRows.map((review) => review.id).join(', ');
       const actionsHtml = pendingReviewCount
         ? `<button type="button" class="primary" onclick="openItemReviewModal(${reviewIds})" style="width: 100%;">Review</button>`
+        : '';
+      const manageHoldHtml = heldRows.length
+        ? `<button type="button" class="secondary" onclick="openManageHoldModal(${heldRows.map((review) => review.id).join(',')})" style="width:100%; ${pendingReviewCount ? 'margin-top:8px;' : ''}">Manage Hold</button>`
         : '';
 
       return `
@@ -528,6 +725,7 @@ async function loadReviewStage2(emp) {
           <div style="margin-top: 20px; border-top: 1px solid var(--line); padding-top: 16px;">
              <strong style="display: block; margin-bottom: 10px;">Pending Reviews: ${pendingReviewCount}</strong>
               ${actionsHtml}
+              ${manageHoldHtml}
           </div>
         </div>
       `;
@@ -549,6 +747,7 @@ async function loadReviewStage2(emp) {
   } finally {
     document.getElementById("reviewStage2Loading").style.display = "none";
     document.getElementById("reviewStage2Content").style.display = "block";
+    if (preserveModal && modalWasOpen) reviewModal.classList.add("show");
   }
 }
 
@@ -745,7 +944,7 @@ window.renderCorrectionHistory = function() {
             <td>${text(r.issue_year || '-')}</td>
             <td><span class="badge ${r.old_decision}">${text(r.old_decision)}</span></td>
             <td><span class="badge ${r.new_decision}">${text(r.new_decision)}</span></td>
-            <td class="reason">${text(r.reason)}</td>
+            <td class="reason">${text(r.reason)}${r.old_quantity !== null && r.old_quantity !== undefined ? `<br><small>Quantity: ${Number(r.old_quantity)} → ${Number(r.new_quantity || 0)}</small>` : ''}</td>
             <td>${dateStr}</td>
             <td>${timeStr}</td>
         </tr>

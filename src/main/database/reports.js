@@ -87,10 +87,10 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
       
       const reviews = all(`
           SELECT r.*, 
-              (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Pending' AND COALESCE(is_active, 1) = 1) as pending_qty,
-              (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Deduct' AND COALESCE(is_active, 1) = 1) as deduct_qty,
-              (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Waive' AND COALESCE(is_active, 1) = 1) as waive_qty,
-              (SELECT COALESCE(SUM(quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND decision = 'Hold' AND COALESCE(is_active, 1) = 1) as hold_qty
+              (SELECT COALESCE(SUM(MAX(0, quantity - deducted_quantity - waived_quantity - held_quantity)), 0) FROM review_queue_items WHERE review_queue_id = r.id AND COALESCE(is_active, 1) = 1) as pending_qty,
+              (SELECT COALESCE(SUM(deducted_quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND COALESCE(is_active, 1) = 1) as deduct_qty,
+              (SELECT COALESCE(SUM(waived_quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND COALESCE(is_active, 1) = 1) as waive_qty,
+              (SELECT COALESCE(SUM(held_quantity), 0) FROM review_queue_items WHERE review_queue_id = r.id AND COALESCE(is_active, 1) = 1) as hold_qty
           FROM review_queue r 
           ORDER BY CASE WHEN r.status = 'Pending' THEN 0 ELSE 1 END, r.created_at ASC, r.id ASC LIMIT 500
       `).map((row) => ({ ...row, category: classifyReviewReason(row.reason) }));
@@ -102,7 +102,7 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
          GROUP BY lower(unit), lower(item_name) ORDER BY unit, item_name`
       );
       
-      const reviewPendingCount = scalar("SELECT COUNT(*) FROM review_queue_items WHERE decision = 'Pending' AND COALESCE(is_active, 1) = 1");
+      const reviewPendingCount = scalar("SELECT COUNT(*) FROM review_queue_items WHERE MAX(0, quantity - deducted_quantity - waived_quantity - held_quantity) > 0 AND COALESCE(is_active, 1) = 1");
       const reviewTotalCount = scalar("SELECT COUNT(*) FROM review_queue_items WHERE COALESCE(is_active, 1) = 1");
       const uniformIssueCount = scalar("SELECT COUNT(*) FROM uniform_issues WHERE quantity > 0");
       const distributionRows = [...matrixByEmployee.values()]
@@ -114,6 +114,14 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         );
         
       const livePayrollRecords = all(`
+        WITH allocation_rows AS (
+          SELECT id, review_queue_id, employee_code, item_name, remarks, reviewed_by, reviewed_at, is_corrected, is_active,
+                 deducted_quantity AS quantity, 'Deduct' AS decision FROM review_queue_items WHERE deducted_quantity > 0 AND COALESCE(is_active, 1) = 1
+          UNION ALL SELECT id, review_queue_id, employee_code, item_name, remarks, reviewed_by, reviewed_at, is_corrected, is_active,
+                 waived_quantity, 'Waive' FROM review_queue_items WHERE waived_quantity > 0 AND COALESCE(is_active, 1) = 1
+          UNION ALL SELECT id, review_queue_id, employee_code, item_name, remarks, reviewed_by, reviewed_at, is_corrected, is_active,
+                 held_quantity, 'Hold' FROM review_queue_items WHERE held_quantity > 0 AND COALESCE(is_active, 1) = 1
+        )
         SELECT
           MIN(rqi.id) AS id,
           rqi.decision AS record_type,
@@ -135,7 +143,7 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
           MAX(rqi.reviewed_at) AS reviewed_at,
           rqi.decision,
           MAX(rqi.is_corrected) AS is_corrected
-        FROM review_queue_items rqi
+        FROM allocation_rows rqi
         JOIN review_queue rq ON rq.id = rqi.review_queue_id
         LEFT JOIN employees e ON e.employee_code = rqi.employee_code
         LEFT JOIN unit_policies up ON lower(up.unit) = lower(COALESCE(rq.unit, e.unit, '')) AND lower(up.item_name) = lower(rqi.item_name)
@@ -145,8 +153,18 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
       `);
 
       const correctionCentreRecords = all(`
+        WITH allocation_rows AS (
+          SELECT id, review_queue_id, employee_code, item_name, remarks, reviewed_at, is_corrected, is_active,
+                 deducted_quantity AS quantity, 'Deduct' AS decision FROM review_queue_items WHERE deducted_quantity > 0 AND COALESCE(is_active, 1) = 1
+          UNION ALL SELECT id, review_queue_id, employee_code, item_name, remarks, reviewed_at, is_corrected, is_active,
+                 waived_quantity, 'Waive' FROM review_queue_items WHERE waived_quantity > 0 AND COALESCE(is_active, 1) = 1
+          UNION ALL SELECT id, review_queue_id, employee_code, item_name, remarks, reviewed_at, is_corrected, is_active,
+                 held_quantity, 'Hold' FROM review_queue_items WHERE held_quantity > 0 AND COALESCE(is_active, 1) = 1
+        )
         SELECT
-          MIN(rqi.id) AS id,
+          (rqi.id || ':' || rqi.decision) AS id,
+          rqi.id AS item_id,
+          rqi.decision AS allocation_decision,
           rqi.decision AS record_type,
           rqi.employee_code,
           COALESCE(MAX(e.employee_name), MAX(rq.employee_name), rqi.employee_code) AS employee_name,
@@ -157,13 +175,13 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
           MAX(rq.issue_year) AS issue_year,
           MAX(rqi.reviewed_at) AS reviewed_at,
           COALESCE(MAX(rqi.remarks), MAX(rq.remarks), '') AS remarks
-        FROM review_queue_items rqi
+        FROM allocation_rows rqi
         JOIN review_queue rq ON rq.id = rqi.review_queue_id
         LEFT JOIN employees e ON e.employee_code = rqi.employee_code
         WHERE rqi.decision IN ('Deduct', 'Waive', 'Hold') 
           AND COALESCE(rqi.is_active, 1) = 1
           AND COALESCE(rqi.is_corrected, 0) = 0
-        GROUP BY rq.id, rqi.decision, rqi.item_name, rqi.employee_code
+        GROUP BY rq.id, rqi.id, rqi.decision, rqi.item_name, rqi.employee_code
         ORDER BY MAX(COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at)) DESC, MIN(rqi.id) DESC
       `);
 
@@ -178,6 +196,8 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
           rq.issue_year,
           c.old_decision,
           c.new_decision,
+          c.old_quantity,
+          c.new_quantity,
           c.reason,
           c.created_at,
           c.corrected_by
@@ -195,7 +215,7 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         items: all("SELECT *, CASE WHEN available_stock <= minimum_stock THEN 1 ELSE 0 END AS is_low_stock FROM uniform_items ORDER BY item_name, size"),
         stockMovements: all("SELECT * FROM stock_movements ORDER BY created_at DESC, id DESC LIMIT 100"),
         // Replace childDecisionStats with reviewDecisionStats
-reviewDecisionStats: all("SELECT status as decision, COUNT(*) as count, SUM(excess_qty) as qty FROM review_queue WHERE status IN ('Deducted', 'Waived', 'Held') GROUP BY status"),
+reviewDecisionStats: all("SELECT status as decision, COUNT(*) as count, SUM(excess_qty) as qty FROM review_queue WHERE status IN ('Deducted', 'Waived', 'Held', 'Completed') GROUP BY status"),
         payrollArchives: all(`
           SELECT
             pb.*,
@@ -248,6 +268,14 @@ reviewDecisionStats: all("SELECT status as decision, COUNT(*) as count, SUM(exce
         if (!archiveName) throw new Error("Archive name is required.");
 
         const liveRecords = all(`
+            WITH allocation_rows AS (
+              SELECT id, review_queue_id, employee_code, item_name, remarks, reviewed_at, is_active, deducted_quantity AS quantity, 'Deduct' AS decision
+              FROM review_queue_items WHERE deducted_quantity > 0 AND COALESCE(is_active, 1) = 1
+              UNION ALL SELECT id, review_queue_id, employee_code, item_name, remarks, reviewed_at, is_active, waived_quantity, 'Waive'
+              FROM review_queue_items WHERE waived_quantity > 0 AND COALESCE(is_active, 1) = 1
+              UNION ALL SELECT id, review_queue_id, employee_code, item_name, remarks, reviewed_at, is_active, held_quantity, 'Hold'
+              FROM review_queue_items WHERE held_quantity > 0 AND COALESCE(is_active, 1) = 1
+            )
             SELECT
               rqi.decision,
               rqi.employee_code,
@@ -260,7 +288,7 @@ reviewDecisionStats: all("SELECT status as decision, COUNT(*) as count, SUM(exce
                 ELSE 0
               END) AS amount,
               COALESCE(MAX(rqi.remarks), MAX(rq.remarks), '') AS remarks
-            FROM review_queue_items rqi
+            FROM allocation_rows rqi
             JOIN review_queue rq ON rq.id = rqi.review_queue_id
             LEFT JOIN employees e ON e.employee_code = rqi.employee_code
             LEFT JOIN unit_policies up ON lower(up.unit) = lower(COALESCE(rq.unit, e.unit, '')) AND lower(up.item_name) = lower(rqi.item_name)

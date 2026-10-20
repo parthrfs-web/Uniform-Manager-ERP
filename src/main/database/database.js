@@ -158,6 +158,9 @@ const APP_SCHEMA = {
     "created_at TEXT NOT NULL",
     "is_active INTEGER DEFAULT 1",
     "is_corrected INTEGER DEFAULT 0",
+    "deducted_quantity REAL NOT NULL DEFAULT 0",
+    "waived_quantity REAL NOT NULL DEFAULT 0",
+    "held_quantity REAL NOT NULL DEFAULT 0",
     "FOREIGN KEY(review_queue_id) REFERENCES review_queue(id) ON DELETE CASCADE"
   ],
   payroll_batches: [
@@ -204,6 +207,7 @@ const APP_SCHEMA = {
   waive_records: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
     "review_id INTEGER",
+    "quantity REAL NOT NULL DEFAULT 0",
     "employee_code TEXT NOT NULL",
     "employee_name TEXT NOT NULL",
     "unit TEXT",
@@ -244,7 +248,9 @@ const APP_SCHEMA = {
     "new_decision TEXT NOT NULL",
     "reason TEXT NOT NULL",
     "corrected_by TEXT",
-    "created_at TEXT NOT NULL"
+    "created_at TEXT NOT NULL",
+    "old_quantity REAL",
+    "new_quantity REAL"
   ],
   audit_log: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -355,6 +361,19 @@ async function createDatabase(userDataPath) {
           }
         }
       }
+
+      // Backfill historical all-or-nothing decisions into quantity allocations once.
+      db.run(`UPDATE review_queue_items
+        SET deducted_quantity = CASE WHEN decision = 'Deduct' THEN quantity ELSE 0 END,
+            waived_quantity = CASE WHEN decision = 'Waive' THEN quantity ELSE 0 END,
+            held_quantity = CASE WHEN decision = 'Hold' THEN quantity ELSE 0 END
+        WHERE COALESCE(deducted_quantity, 0) = 0
+          AND COALESCE(waived_quantity, 0) = 0
+          AND COALESCE(held_quantity, 0) = 0
+          AND decision IN ('Deduct', 'Waive', 'Hold')`);
+      db.run(`UPDATE waive_records
+        SET quantity = COALESCE((SELECT SUM(waived_quantity) FROM review_queue_items WHERE review_queue_id = waive_records.review_id AND COALESCE(is_active, 1) = 1), quantity)
+        WHERE COALESCE(quantity, 0) = 0`);
 
       const archiveRecordCols = all(`PRAGMA table_info(payroll_batch_records)`).map(r => r.name);
       const legacyArchiveIdCol = ["batch", "id"].join("_");

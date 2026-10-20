@@ -305,6 +305,7 @@ ipcMain.handle("app:restoreDatabase", async () => handleSafe(async () => {
 ipcMain.handle("app:getReviewQueueStage1", () => handleSafe(() => db.getReviewQueueStage1()));
 ipcMain.handle("app:getReviewQueueStage2", (_event, code) => handleSafe(() => db.getReviewQueueStage2(code)));
 ipcMain.handle("app:getReviewQueueStage3", (_event, req) => handleSafe(() => db.getReviewQueueStage3(req)));
+ipcMain.handle("app:getHeldRecords", () => handleSafe(() => db.getHeldRecords()));
 
 ipcMain.handle("app:recalculateReviews", async (event) => handleSafe(async () => {
    const generated = await db.recalculateReviews(buildProgressCb(event, "Recalculating review queue"));
@@ -355,6 +356,7 @@ ipcMain.handle("app:upsertItem", (_event, item) => handleSafe(() => { db.upsertI
 ipcMain.handle("app:deleteItem", (_event, itemId) => handleSafe(() => { db.deleteItem(itemId); return db.getState(); }));
 ipcMain.handle("app:updateReview", (_event, action) => handleSafe(() => { db.updateReview(action); return db.getState(); }));
 ipcMain.handle("app:correctDecision", (_event, payload) => handleSafe(() => { db.correctDecision(payload); return db.getState(); }));
+ipcMain.handle("app:resolveHeldQuantity", (_event, payload) => handleSafe(() => { db.resolveHeldQuantity(payload); return db.getState(); }));
 ipcMain.handle("app:deleteReview", (_event, reviewId) => handleSafe(() => { db.deleteReview(reviewId); return db.getState(); }));
 
 ipcMain.handle("app:updateDistributionRow", async (event, record) => handleSafe(async () => { 

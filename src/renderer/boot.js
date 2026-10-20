@@ -5,6 +5,7 @@ const views = {
   issues: ["Distribution Register", "Employee-wise uniform quantity matrix."],
   deductions: ["Payroll Register", "Live deduction, waive and hold registers from review decisions."],
   review: ["Review Queue", "Resolve records that need office staff attention."],
+  held_records: ["Held Records", "View, search, filter, and resolve uniform quantities currently on hold."],
   correction: ["Correction Centre", "Correct finalized review decisions safely."],
   correction_history: ["Correction History", "Audit log of all corrected review decisions."],
   policies: ["Unit Entitlements", "Set allowed uniform quantity for each unit/company and item."],
@@ -46,6 +47,9 @@ function setView(name) {
   if (name === "correction_history" && typeof state !== 'undefined' && typeof window.renderCorrectionHistory === "function") {
     window.renderCorrectionHistory();
   }
+  if (name === "held_records" && typeof window.loadHeldRecordsPage === "function") {
+    window.loadHeldRecordsPage();
+  }
 }
 
 async function loadState() {
@@ -78,24 +82,32 @@ async function loadState() {
 }
 
 function injectCorrectionUI() {
-    if (document.getElementById("correction")) return;
-    
     const navMiddle = document.querySelector(".sidebar-section-middle");
     if (navMiddle) {
-        const btnCorrection = document.createElement("button");
+        const heldButton = navMiddle.querySelector('[data-view="held_records"]') || document.createElement("button");
+        heldButton.className = "nav-button";
+        heldButton.dataset.view = "held_records";
+        heldButton.textContent = "Held Records";
+        const payrollButton = navMiddle.querySelector('[data-view="deductions"]');
+        const reviewButton = navMiddle.querySelector('[data-view="review"]');
+        if (reviewButton) reviewButton.insertAdjacentElement('afterend', heldButton);
+        else if (payrollButton) navMiddle.insertBefore(heldButton, payrollButton);
+        else navMiddle.appendChild(heldButton);
+
+        const btnCorrection = navMiddle.querySelector('[data-view="correction"]') || document.createElement("button");
         btnCorrection.className = "nav-button";
         btnCorrection.dataset.view = "correction";
         btnCorrection.textContent = "Correction Centre";
         
-        const btnHistory = document.createElement("button");
+        const btnHistory = navMiddle.querySelector('[data-view="correction_history"]') || document.createElement("button");
         btnHistory.className = "nav-button";
         btnHistory.dataset.view = "correction_history";
         btnHistory.textContent = "Correction History";
 
-        const analyticsHeader = navMiddle.querySelector(".nav-header");
-        if (analyticsHeader) {
-            navMiddle.insertBefore(btnCorrection, analyticsHeader);
-            navMiddle.insertBefore(btnHistory, analyticsHeader);
+        const payrollNavButton = navMiddle.querySelector('[data-view="deductions"]');
+        if (payrollNavButton) {
+            payrollNavButton.insertAdjacentElement('afterend', btnCorrection);
+            btnCorrection.insertAdjacentElement('afterend', btnHistory);
         } else {
             navMiddle.appendChild(btnCorrection);
             navMiddle.appendChild(btnHistory);
@@ -104,6 +116,43 @@ function injectCorrectionUI() {
 
     const main = document.querySelector("main");
     if (main) {
+        if (!document.getElementById('held_records')) {
+          const heldSection = document.createElement("section");
+          heldSection.className = "view";
+          heldSection.id = "held_records";
+          heldSection.innerHTML = `
+            <div class="stats" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:16px;">
+              <article><span>Total Held Records</span><strong id="heldSummaryRecords">0</strong></article>
+              <article><span>Total Held Quantity</span><strong id="heldSummaryQuantity" class="text-blue">0</strong></article>
+              <article><span>Distinct Employees</span><strong id="heldSummaryEmployees">0</strong></article>
+              <article><span>Distinct Units</span><strong id="heldSummaryUnits">0</strong></article>
+            </div>
+            <div class="toolbar" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;background:#111821;padding:12px;border:1px solid var(--line);border-radius:6px;">
+              <input id="heldSearchEmployee" placeholder="Employee Code or Name" style="flex:1;min-width:170px;">
+              <input id="heldSearchUnit" placeholder="Search Unit" style="flex:1;min-width:140px;">
+              <input id="heldSearchItem" placeholder="Search Item" style="flex:1;min-width:140px;">
+              <select id="heldFilterYear"><option value="">All Financial Years</option></select>
+              <select id="heldFilterMonth"><option value="">All Payroll Months</option></select>
+              <select id="heldFilterUnit"><option value="">All Units</option></select>
+              <select id="heldFilterItem"><option value="">All Items</option></select>
+              <select id="heldFilterStatus"><option value="">All Hold Statuses</option><option value="Held">Currently Held</option></select>
+              <button type="button" class="secondary" id="heldClearFilters">Clear Filters</button>
+            </div>
+            <div class="panel flush" style="margin-top:16px;">
+              <div class="table-wrap"><table>
+                <thead><tr><th>Sr. No.</th><th>Employee Code</th><th>Employee Name</th><th>Unit</th><th>Item</th><th>Payroll Month / Distribution Period</th><th>Original Excess</th><th>Deducted</th><th>Waived</th><th>Currently Held</th><th>Hold Reason</th><th>Hold Date</th><th>Actions</th></tr></thead>
+                <tbody id="heldRecordsRows"></tbody>
+              </table></div>
+            </div>`;
+          main.appendChild(heldSection);
+        }
+
+        const heldModals = document.createElement('div');
+        heldModals.innerHTML = `
+          <div class="modal-backdrop" id="heldDetailsModal"><div class="modal" style="width:min(720px,96vw);"><div class="modal-header"><h3>Held Record Details</h3><button type="button" class="secondary" data-close-held-modal>×</button></div><pre id="heldDetailsText" style="white-space:pre-wrap;line-height:1.7;padding:18px;color:var(--ink);"></pre></div></div>
+          <div class="modal-backdrop" id="heldResolveModal"><div class="modal" style="width:min(620px,96vw);"><div class="modal-header"><h3>Resolve Held Quantity</h3><button type="button" class="secondary" data-close-held-modal>×</button></div><div id="heldResolveDetails" style="padding:18px;"></div><form id="heldResolveForm"><input type="hidden" id="heldResolveReviewId"><input type="hidden" id="heldResolveItemId"><div style="padding:0 18px 18px;display:grid;gap:12px;"><label>Quantity to resolve<input type="number" id="heldResolveQuantity" min="1" step="1" required></label><label>Reason<input type="text" id="heldResolveReason" required placeholder="Reason for resolving this hold"></label><div style="display:flex;gap:8px;flex-wrap:wrap;"><button type="submit" class="primary" data-held-decision="Deduct">Release &amp; Deduct</button><button type="submit" class="secondary" data-held-decision="Waive">Release &amp; Waive</button><button type="submit" class="secondary" data-held-decision="Hold">Keep on Hold</button></div></div></form></div></div>`;
+        while (heldModals.firstElementChild) document.body.appendChild(heldModals.firstElementChild);
+
         // 1. Correction Centre
         const correctionSection = document.createElement("section");
         correctionSection.className = "view";

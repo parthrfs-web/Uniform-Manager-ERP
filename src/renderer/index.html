@@ -338,6 +338,31 @@
         </div>
       </section>
 
+      <div class="modal-backdrop" id="manageHoldModal" aria-hidden="true">
+        <div class="modal" style="max-width: 720px;">
+          <div class="modal-header">
+            <h3>Manage Held Quantity</h3>
+            <button type="button" class="secondary" id="closeManageHoldModal">×</button>
+          </div>
+          <div id="manageHoldDetails"></div>
+          <form id="manageHoldForm" style="margin-top:16px;">
+            <input type="hidden" id="manageHoldReviewId">
+            <input type="hidden" id="manageHoldItemId">
+            <label>Quantity to resolve
+              <input id="manageHoldQuantity" type="number" min="1" step="1" required>
+            </label>
+            <label style="display:block; margin-top:12px;">Reason
+              <input id="manageHoldReason" type="text" required placeholder="Reason for resolving or retaining this hold">
+            </label>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:16px;">
+              <button type="submit" class="primary" data-hold-resolution="Deduct">Release &amp; Deduct</button>
+              <button type="submit" class="secondary" data-hold-resolution="Waive">Release &amp; Waive</button>
+              <button type="submit" class="secondary" data-hold-resolution="Hold">Keep on Hold</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
       <!-- Deductions & Payroll Register View -->
       <section class="view" id="deductions">
         <div class="panel flush" style="padding: 18px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center; background: #131922;">
@@ -867,7 +892,7 @@
             </div>
             
             <div class="modal-footer" style="padding: 16px 20px; background: var(--panel);">
-                <div style="flex: 1; color: var(--red); font-weight: 600; font-size: 13px;" id="indRevSaveMsg"></div>
+                <div style="flex: 1; color: var(--muted); font-weight: 600; font-size: 13px;" id="indRevSaveMsg"></div>
                 <button type="button" class="secondary" onclick="closeIndividualReviewModal()">Cancel</button>
                 <button type="submit" class="primary" id="indRevSaveBtn">Save Decisions & Finalize</button>
             </div>
@@ -977,6 +1002,7 @@
     <script src="./inventory/inventory.js"></script>
     <script src="./policies/policies.js"></script>
     <script src="./reviews/reviewQueue.js"></script>
+    <script src="./reviews/heldRecords.js"></script>
     <script src="./payroll/payroll.js"></script>
     <script src="./analytics/analytics.js"></script>
     <script src="./dashboard/dashboard.js"></script>

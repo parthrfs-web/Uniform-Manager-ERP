@@ -40,8 +40,9 @@ module.exports = ({ db, scalar, all }) => {
             if (filters.decisionStatus === 'OK') {
                 where += " AND rqi.id IS NULL";
             } else {
-                where += " AND rqi.decision = ?";
-                params.push(filters.decisionStatus);
+                const allocationField = { Deduct: 'deducted_quantity', Waive: 'waived_quantity', Hold: 'held_quantity' }[filters.decisionStatus];
+                if (allocationField) where += ` AND COALESCE(rqi.${allocationField}, 0) > 0`;
+                else { where += " AND rqi.decision = ?"; params.push(filters.decisionStatus); }
             }
         }
 
@@ -57,13 +58,13 @@ module.exports = ({ db, scalar, all }) => {
                 SUM(ui.quantity) AS total_quantity_issued,
                 COUNT(ui.id) AS total_transactions,
                 SUM(ui.quantity * COALESCE(up.item_cost, itm.cost, 0)) AS total_distribution_cost,
-                SUM(CASE WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(up.item_cost, itm.cost, 0) ELSE 0 END) AS total_recovery_amount,
-                SUM(CASE WHEN rqi.decision = 'Waive' THEN rqi.quantity * COALESCE(up.item_cost, itm.cost, 0) ELSE 0 END) AS total_waived_amount,
-                SUM(CASE WHEN rqi.decision = 'Hold' THEN rqi.quantity * COALESCE(up.item_cost, itm.cost, 0) ELSE 0 END) AS total_held_amount,
-                SUM(CASE WHEN rqi.decision = 'Pending' THEN rqi.quantity ELSE 0 END) AS pending_qty_count,
-                SUM(CASE WHEN rqi.decision = 'Deduct' THEN 1 ELSE 0 END) AS deduction_count,
-                SUM(CASE WHEN rqi.decision = 'Waive' THEN 1 ELSE 0 END) AS waiver_count,
-                SUM(CASE WHEN rqi.decision = 'Hold' THEN 1 ELSE 0 END) AS hold_count
+                SUM(COALESCE(rqi.deducted_quantity, 0) * COALESCE(up.item_cost, itm.cost, 0)) AS total_recovery_amount,
+                SUM(COALESCE(rqi.waived_quantity, 0) * COALESCE(up.item_cost, itm.cost, 0)) AS total_waived_amount,
+                SUM(COALESCE(rqi.held_quantity, 0) * COALESCE(up.item_cost, itm.cost, 0)) AS total_held_amount,
+                SUM(CASE WHEN rqi.id IS NOT NULL THEN MAX(0, rqi.quantity - rqi.deducted_quantity - rqi.waived_quantity - rqi.held_quantity) ELSE 0 END) AS pending_qty_count,
+                SUM(CASE WHEN rqi.deducted_quantity > 0 THEN 1 ELSE 0 END) AS deduction_count,
+                SUM(CASE WHEN rqi.waived_quantity > 0 THEN 1 ELSE 0 END) AS waiver_count,
+                SUM(CASE WHEN rqi.held_quantity > 0 THEN 1 ELSE 0 END) AS hold_count
             FROM uniform_issues ui
             ${joinClause}
             ${whereClause}
@@ -86,7 +87,7 @@ module.exports = ({ db, scalar, all }) => {
                 ui.issued_at,
                 ui.issue_year AS financial_year,
                 ui.issue_month,
-                COALESCE(rqi.decision, 'OK') AS decision_status,
+                CASE WHEN rqi.id IS NULL THEN 'OK' WHEN rqi.deducted_quantity > 0 AND rqi.waived_quantity + rqi.held_quantity = 0 THEN 'Deduct' WHEN rqi.waived_quantity > 0 AND rqi.deducted_quantity + rqi.held_quantity = 0 THEN 'Waive' WHEN rqi.held_quantity > 0 AND rqi.deducted_quantity + rqi.waived_quantity = 0 THEN 'Hold' WHEN rqi.deducted_quantity + rqi.waived_quantity + rqi.held_quantity > 0 THEN 'Completed' ELSE 'Pending' END AS decision_status,
                 rqi.remarks
             FROM uniform_issues ui
             ${joinClause}
@@ -98,7 +99,7 @@ module.exports = ({ db, scalar, all }) => {
     }
 
     function getDecisionRegister(filters) {
-        let where = "WHERE rqi.decision IN ('Deduct', 'Hold', 'Waive') AND COALESCE(rqi.is_active, 1) = 1";
+        let where = "WHERE rqi.decision IN ('Deduct', 'Hold', 'Waive') AND COALESCE(rqi.is_active, 1) = 1 AND rqi.quantity > 0";
         const params = [];
 
         if (filters.fy) {
@@ -123,6 +124,14 @@ module.exports = ({ db, scalar, all }) => {
         }
 
         return all(`
+          WITH allocation_rows AS (
+            SELECT id, review_queue_id, employee_code, item_name, remarks, reviewed_at, reviewed_by, is_active,
+                   deducted_quantity AS quantity, 'Deduct' AS decision FROM review_queue_items WHERE deducted_quantity > 0
+            UNION ALL SELECT id, review_queue_id, employee_code, item_name, remarks, reviewed_at, reviewed_by, is_active,
+                   waived_quantity, 'Waive' FROM review_queue_items WHERE waived_quantity > 0
+            UNION ALL SELECT id, review_queue_id, employee_code, item_name, remarks, reviewed_at, reviewed_by, is_active,
+                   held_quantity, 'Hold' FROM review_queue_items WHERE held_quantity > 0
+          )
             SELECT
                 MAX(rq.issue_month) AS issue_month,
                 MAX(rq.issue_year) AS issue_year,
@@ -138,7 +147,7 @@ module.exports = ({ db, scalar, all }) => {
                 MAX(rqi.reviewed_by) AS approved_by,
                 COALESCE(MAX(rqi.remarks), MAX(rq.remarks), '') AS remarks,
                 MAX(rq.status) AS current_status
-            FROM review_queue_items rqi
+            FROM allocation_rows rqi
             JOIN review_queue rq ON rq.id = rqi.review_queue_id
             LEFT JOIN employees e ON e.employee_code = rqi.employee_code
             LEFT JOIN unit_policies up ON lower(up.unit) = lower(COALESCE(rq.unit, e.unit, '')) AND lower(up.item_name) = lower(rqi.item_name)
@@ -171,6 +180,10 @@ module.exports = ({ db, scalar, all }) => {
             // Fetch raw finalized deduction records natively grouped
             // COALESCE(up.item_cost, rq.item_cost, 0) mimics EXACTLY how the Payroll Register calculates total amount
             const query = `
+                WITH allocation_rows AS (
+                  SELECT id, review_queue_id, employee_code, item_name, is_active, deducted_quantity AS quantity, 'Deduct' AS decision
+                  FROM review_queue_items WHERE deducted_quantity > 0
+                )
                 SELECT 
                     rqi.employee_code,
                     COALESCE(MAX(e.employee_name), MAX(rq.employee_name), rqi.employee_code) AS employee_name,
@@ -181,7 +194,7 @@ module.exports = ({ db, scalar, all }) => {
                     rqi.item_name,
                     SUM(rqi.quantity) as quantity,
                     COALESCE(MAX(up.item_cost), MAX(rq.item_cost), MAX(itm.cost), 0) AS rate
-                FROM review_queue_items rqi
+                FROM allocation_rows rqi
                 JOIN review_queue rq ON rq.id = rqi.review_queue_id
                 LEFT JOIN employees e ON e.employee_code = rqi.employee_code
                 LEFT JOIN uniform_items itm ON lower(rqi.item_name) = lower(itm.item_name)
@@ -251,7 +264,7 @@ module.exports = ({ db, scalar, all }) => {
         getYearlyAnalytics(filters) {
             const { where, params, joinReviewQueue } = buildBaseFilter(filters);
             const summary = getSummaryCards(where, params, joinReviewQueue);
-            const monthlyTrend = all(`SELECT COALESCE(ui.issue_month, 0) AS month_num, SUM(ui.quantity) AS total_qty, SUM(ui.quantity * COALESCE(up.item_cost, itm.cost, 0)) AS total_cost, SUM(CASE WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(up.item_cost, itm.cost, 0) ELSE 0 END) AS total_recovery FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY ui.issue_month ORDER BY ui.issue_month ASC`, params);
+            const monthlyTrend = all(`SELECT COALESCE(ui.issue_month, 0) AS month_num, SUM(ui.quantity) AS total_qty, SUM(ui.quantity * COALESCE(up.item_cost, itm.cost, 0)) AS total_cost, SUM(COALESCE(rqi.deducted_quantity, 0) * COALESCE(up.item_cost, itm.cost, 0)) AS total_recovery FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY ui.issue_month ORDER BY ui.issue_month ASC`, params);
             const itemWise = all(`SELECT ui.item_name AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY lower(ui.item_name) ORDER BY value DESC LIMIT 15`, params);
             const unitWise = all(`SELECT COALESCE(ui.unit, 'Unknown') AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY lower(ui.unit) ORDER BY value DESC LIMIT 15`, params);
             const topEmployees = all(`SELECT ui.employee_name AS label, SUM(ui.quantity) AS value FROM uniform_issues ui ${joinReviewQueue} ${where} GROUP BY ui.employee_code ORDER BY value DESC LIMIT 15`, params);
