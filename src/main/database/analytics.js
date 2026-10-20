@@ -124,26 +124,27 @@ module.exports = ({ db, scalar, all }) => {
 
         return all(`
             SELECT
-                rq.issue_month,
-                rq.issue_year,
-                rqi.id,
+                MAX(rq.issue_month) AS issue_month,
+                MAX(rq.issue_year) AS issue_year,
+                MIN(rqi.id) AS id,
                 rqi.employee_code,
-                COALESCE(e.employee_name, rq.employee_name, rqi.employee_code) AS employee_name,
-                COALESCE(rq.unit, e.unit, '') AS unit,
+                COALESCE(MAX(e.employee_name), MAX(rq.employee_name), rqi.employee_code) AS employee_name,
+                COALESCE(MAX(rq.unit), MAX(e.unit), '') AS unit,
                 rqi.item_name,
-                rqi.quantity,
+                SUM(rqi.quantity) AS quantity,
                 rqi.decision,
-                CASE WHEN rqi.decision = 'Deduct' THEN (rqi.quantity * COALESCE(up.item_cost, rq.item_cost, 0)) ELSE 0 END AS deduction_amount,
-                rqi.reviewed_at AS review_date,
-                rqi.reviewed_by AS approved_by,
-                rqi.remarks,
-                rq.status AS current_status
+                SUM(CASE WHEN rqi.decision = 'Deduct' THEN (rqi.quantity * COALESCE(up.item_cost, rq.item_cost, 0)) ELSE 0 END) AS deduction_amount,
+                MAX(rqi.reviewed_at) AS review_date,
+                MAX(rqi.reviewed_by) AS approved_by,
+                COALESCE(MAX(rqi.remarks), MAX(rq.remarks), '') AS remarks,
+                MAX(rq.status) AS current_status
             FROM review_queue_items rqi
             JOIN review_queue rq ON rq.id = rqi.review_queue_id
             LEFT JOIN employees e ON e.employee_code = rqi.employee_code
             LEFT JOIN unit_policies up ON lower(up.unit) = lower(COALESCE(rq.unit, e.unit, '')) AND lower(up.item_name) = lower(rqi.item_name)
             ${where}
-            ORDER BY COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at) DESC, rqi.id DESC
+            GROUP BY rq.id, rqi.decision, rqi.item_name, rqi.employee_code
+            ORDER BY MAX(COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at)) DESC, MIN(rqi.id) DESC
         `, params);
     }
 

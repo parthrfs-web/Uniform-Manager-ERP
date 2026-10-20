@@ -113,99 +113,117 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         const total = targetEmployees.length;
 
         const processBatch = (start, end) => {
-            db.run("BEGIN TRANSACTION");
-            try {
-                for (let i = start; i < end; i++) {
-                    const empCode = targetEmployees[i];
+    db.run("BEGIN TRANSACTION");
+    try {
+        const batchEmps = targetEmployees.slice(start, end);
+        if (batchEmps.length > 0) {
+            // 1. Idempotent Cleanup: Clear stale pending reviews for these employees before recalculating
+            const placeholders = batchEmps.map(() => '?').join(',');
+            db.run(`DELETE FROM review_queue_items WHERE decision = 'Pending' AND review_queue_id IN (SELECT id FROM review_queue WHERE status = 'Pending' AND employee_code IN (${placeholders}))`, batchEmps);
+            db.run(`DELETE FROM review_queue WHERE status = 'Pending' AND employee_code IN (${placeholders})`, batchEmps);
+        }
+
+        for (let i = start; i < end; i++) {
+            const empCode = targetEmployees[i];
+            
+            const issues = all(`SELECT * FROM uniform_issues WHERE employee_code = ? AND quantity > 0 ORDER BY COALESCE(issue_year, 9999) ASC, COALESCE(issue_month, 99) ASC, issued_at ASC, source_row ASC, id ASC`, [empCode]);
+            
+            const itemsMap = new Map();
+            issues.forEach(issue => {
+                const key = String(issue.item_name).toLowerCase();
+                if (!itemsMap.has(key)) itemsMap.set(key, { item_name: issue.item_name, issues: [] });
+                itemsMap.get(key).issues.push(issue);
+            });
+
+            for (const [itemKey, data] of itemsMap.entries()) {
+                const itemName = data.item_name;
+                const itemIssues = data.issues;
+                
+                const unitBalances = new Map();
+                const unitIssued = new Map();
+                const excessTransactions = [];
+                let maxCost = 0;
+
+                for (const issue of itemIssues) {
+                    const unit = issue.unit || "";
+                    const pKey = `${String(unit).toLowerCase()}|${itemKey}`;
+                    const cost = costMap.get(pKey) || 0;
+                    if (cost > maxCost) maxCost = cost;
                     
-                    const issues = all(`SELECT * FROM uniform_issues WHERE employee_code = ? AND quantity > 0 ORDER BY COALESCE(issue_year, 9999) ASC, COALESCE(issue_month, 99) ASC, issued_at ASC, source_row ASC, id ASC`, [empCode]);
+                    if (!unitBalances.has(pKey)) {
+                        unitBalances.set(pKey, policyMap.has(pKey) ? policyMap.get(pKey) : 0);
+                    }
+                    if (!unitIssued.has(pKey)) {
+                        unitIssued.set(pKey, 0);
+                    }
                     
-                    const itemsMap = new Map();
-                    issues.forEach(issue => {
-                        const key = String(issue.item_name).toLowerCase();
-                        if (!itemsMap.has(key)) itemsMap.set(key, { item_name: issue.item_name, issues: [] });
-                        itemsMap.get(key).issues.push(issue);
-                    });
-
-                    for (const [itemKey, data] of itemsMap.entries()) {
-                        const itemName = data.item_name;
-                        const itemIssues = data.issues;
-                        
-                        let totalIssued = 0;
-                        let totalExcess = 0;
-                        
-                        const unitBalances = new Map();
-                        const excessTransactions = [];
-                        let latestUnit = "";
-                        let maxCost = 0;
-
-                        for (const issue of itemIssues) {
-                            latestUnit = issue.unit || latestUnit;
-                            const pKey = `${String(issue.unit || '').toLowerCase()}|${itemKey}`;
-                            const cost = costMap.get(pKey) || 0;
-                            if (cost > maxCost) maxCost = cost;
-                            
-                            if (!unitBalances.has(pKey)) {
-                                unitBalances.set(pKey, policyMap.has(pKey) ? policyMap.get(pKey) : 0);
-                            }
-                            
-                            totalIssued += issue.quantity;
-                            
-                            let balance = unitBalances.get(pKey);
-                            let consumed = Math.min(issue.quantity, balance);
-                            unitBalances.set(pKey, balance - consumed);
-                            
-                            let excess = issue.quantity - consumed;
-                            if (excess > 0) {
-                                totalExcess += excess;
-                                excessTransactions.push({ issue, excess_qty: excess });
-                            }
-                        }
-                        
-                        const totalAllowed = totalIssued - totalExcess;
-                        
-                        for (const ext of excessTransactions) {
-                            const unit = ext.issue.unit || "";
-                            const pKey = `${String(unit).toLowerCase()}|${itemKey}`;
-                            const itemCost = costMap.get(pKey) || 0;
-                            const reason = policyMap.has(pKey)
-                                ? `${itemName} entitlement exceeded.`
-                                : `No entitlement policy found for ${unit || "Unknown Unit"} / ${itemName}.`;
-                            const existingPieceReviews = all(`
-                                SELECT rq.*
-                                FROM review_queue rq
-                                JOIN review_queue_items rqi ON rqi.review_queue_id = rq.id
-                                WHERE rqi.uniform_issue_id = ?
-                                  AND rq.employee_code = ?
-                                  AND lower(rq.item_name) = ?
-                                  AND rqi.quantity = 1
-                                ORDER BY rq.id ASC
-                            `, [ext.issue.id, empCode, itemKey]);
-
-                            let remaining = Number(ext.excess_qty || 0);
-                            let pieceIndex = 0;
-                            while (remaining > 0) {
-                                const pieceQuantity = Math.min(1, remaining);
-                                if (!existingPieceReviews[pieceIndex]) {
-                                    db.run(`INSERT INTO review_queue (employee_code, employee_name, unit, item_name, issue_month, issue_year, issue_period_label, issued_qty, allowed_qty, excess_qty, item_cost, estimated_amount, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)`,
-[empCode, ext.issue.employee_name, unit, itemName, ext.issue.issue_month, ext.issue.issue_year, ext.issue.issue_period_label, pieceQuantity, 0, pieceQuantity, itemCost, pieceQuantity * itemCost, reason, now()]);
-                                    const rqId = scalar("SELECT last_insert_rowid()");
-                                    db.run(`INSERT INTO review_queue_items (review_queue_id, uniform_issue_id, employee_code, item_name, issue_date, quantity, decision, remarks, reviewed_by, reviewed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, 'Pending', '', NULL, NULL, ?)`,
-                                    [rqId, ext.issue.id, empCode, itemName, ext.issue.issued_at, pieceQuantity, now()]);
-                                    generatedCount++;
-                                }
-                                remaining -= pieceQuantity;
-                                pieceIndex++;
-                            }
-                        }
+                    unitIssued.set(pKey, unitIssued.get(pKey) + issue.quantity);
+                    
+                    let balance = unitBalances.get(pKey);
+                    let consumed = Math.min(issue.quantity, balance);
+                    unitBalances.set(pKey, balance - consumed);
+                    
+                    let excess = issue.quantity - consumed;
+                    if (excess > 0) {
+                        excessTransactions.push({ issue, excess_qty: excess, unit, pKey });
                     }
                 }
-                db.run("COMMIT");
-            } catch (e) {
-                db.run("ROLLBACK");
-                throw e;
+                
+                // 2. Consolidate excesses by Unit to generate exactly ONE Review Queue per transaction
+                const unitPendingExcess = new Map();
+
+                for (const ext of excessTransactions) {
+                    const resolvedQty = scalar(`
+                        SELECT COALESCE(SUM(rqi.quantity), 0)
+                        FROM review_queue_items rqi
+                        WHERE rqi.uniform_issue_id = ? AND rqi.decision != 'Pending' AND COALESCE(rqi.is_active, 1) = 1
+                    `, [ext.issue.id]) || 0;
+
+                    const pendingExcess = ext.excess_qty - resolvedQty;
+                    if (pendingExcess > 0) {
+                        const pKey = ext.pKey;
+                        if (!unitPendingExcess.has(pKey)) {
+                            unitPendingExcess.set(pKey, {
+                                unit: ext.unit,
+                                itemCost: costMap.get(pKey) || 0,
+                                allowed_qty: policyMap.has(pKey) ? policyMap.get(pKey) : null,
+                                issued_qty: unitIssued.get(pKey),
+                                total_excess_qty: 0,
+                                issues: []
+                            });
+                        }
+                        const group = unitPendingExcess.get(pKey);
+                        group.total_excess_qty += pendingExcess;
+                        group.issues.push({ ...ext, pendingExcess });
+                    }
+                }
+                
+                // 3. Insert specific exact DB entitlements and quantities
+                for (const group of unitPendingExcess.values()) {
+                    const reason = group.allowed_qty !== null
+                        ? `${itemName} entitlement exceeded.`
+                        : `No entitlement policy found for ${group.unit || "Unknown Unit"} / ${itemName}.`;
+
+                    const sampleIssue = group.issues[0].issue;
+                    db.run(`INSERT INTO review_queue (employee_code, employee_name, unit, item_name, issue_month, issue_year, issue_period_label, issued_qty, allowed_qty, excess_qty, item_cost, estimated_amount, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)`,
+                        [empCode, sampleIssue.employee_name, group.unit, itemName, sampleIssue.issue_month, sampleIssue.issue_year, sampleIssue.issue_period_label, group.issued_qty, group.allowed_qty, group.total_excess_qty, group.itemCost, group.total_excess_qty * group.itemCost, reason, now()]);
+                    
+                    const rqId = scalar("SELECT last_insert_rowid()");
+                    
+                    for (const ext of group.issues) {
+                        db.run(`INSERT INTO review_queue_items (review_queue_id, uniform_issue_id, employee_code, item_name, issue_date, quantity, decision, remarks, reviewed_by, reviewed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, 'Pending', '', NULL, NULL, ?)`,
+                            [rqId, ext.issue.id, empCode, itemName, ext.issue.issued_at, ext.pendingExcess, now()]);
+                    }
+                    generatedCount++;
+                }
             }
-        };
+        }
+        db.run("COMMIT");
+    } catch (e) {
+        db.run("ROLLBACK");
+        throw e;
+    }
+};
 
         const finalize = () => {
             if (generatedCount > 0) {

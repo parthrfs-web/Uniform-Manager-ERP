@@ -115,56 +115,56 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         
       const livePayrollRecords = all(`
         SELECT
-          rqi.id,
+          MIN(rqi.id) AS id,
           rqi.decision AS record_type,
           rqi.employee_code,
-          COALESCE(e.employee_name, rq.employee_name, rqi.employee_code) AS employee_name,
-          COALESCE(rq.unit, e.unit, '') AS unit,
+          COALESCE(MAX(e.employee_name), MAX(rq.employee_name), rqi.employee_code) AS employee_name,
+          COALESCE(MAX(rq.unit), MAX(e.unit), '') AS unit,
           rqi.item_name,
-          rqi.quantity,
-          COALESCE(up.item_cost, rq.item_cost, 0) AS rate,
-          CASE
+          SUM(rqi.quantity) AS quantity,
+          COALESCE(MAX(up.item_cost), MAX(rq.item_cost), 0) AS rate,
+          SUM(CASE
             WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(up.item_cost, rq.item_cost, 0)
             ELSE 0
-          END AS amount,
-          COALESCE(rqi.remarks, rq.remarks, '') AS remarks,
-          rq.issue_month,
-          rq.issue_year,
-          rq.issue_period_label,
-          rqi.reviewed_by,
-          rqi.reviewed_at,
+          END) AS amount,
+          COALESCE(MAX(rqi.remarks), MAX(rq.remarks), '') AS remarks,
+          MAX(rq.issue_month) AS issue_month,
+          MAX(rq.issue_year) AS issue_year,
+          MAX(rq.issue_period_label) AS issue_period_label,
+          MAX(rqi.reviewed_by) AS reviewed_by,
+          MAX(rqi.reviewed_at) AS reviewed_at,
           rqi.decision,
-          rqi.is_corrected
+          MAX(rqi.is_corrected) AS is_corrected
         FROM review_queue_items rqi
         JOIN review_queue rq ON rq.id = rqi.review_queue_id
         LEFT JOIN employees e ON e.employee_code = rqi.employee_code
         LEFT JOIN unit_policies up ON lower(up.unit) = lower(COALESCE(rq.unit, e.unit, '')) AND lower(up.item_name) = lower(rqi.item_name)
         WHERE rqi.decision IN ('Deduct', 'Waive', 'Hold') AND COALESCE(rqi.is_active, 1) = 1
-        ORDER BY COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at) DESC, rqi.id DESC
+        GROUP BY rq.id, rqi.decision, rqi.item_name, rqi.employee_code
+        ORDER BY MAX(COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at)) DESC, MIN(rqi.id) DESC
       `);
 
-      // STRICT LOCK REQUIREMENT: Isolate Correction Centre rows logically here.
-      // This query guarantees we only return original, finalized decisions that have NEVER been corrected.
       const correctionCentreRecords = all(`
         SELECT
-          rqi.id,
+          MIN(rqi.id) AS id,
           rqi.decision AS record_type,
           rqi.employee_code,
-          COALESCE(e.employee_name, rq.employee_name, rqi.employee_code) AS employee_name,
-          COALESCE(rq.unit, e.unit, '') AS unit,
+          COALESCE(MAX(e.employee_name), MAX(rq.employee_name), rqi.employee_code) AS employee_name,
+          COALESCE(MAX(rq.unit), MAX(e.unit), '') AS unit,
           rqi.item_name,
-          rqi.quantity,
-          rq.issue_month,
-          rq.issue_year,
-          rqi.reviewed_at,
-          COALESCE(rqi.remarks, rq.remarks, '') AS remarks
+          SUM(rqi.quantity) AS quantity,
+          MAX(rq.issue_month) AS issue_month,
+          MAX(rq.issue_year) AS issue_year,
+          MAX(rqi.reviewed_at) AS reviewed_at,
+          COALESCE(MAX(rqi.remarks), MAX(rq.remarks), '') AS remarks
         FROM review_queue_items rqi
         JOIN review_queue rq ON rq.id = rqi.review_queue_id
         LEFT JOIN employees e ON e.employee_code = rqi.employee_code
         WHERE rqi.decision IN ('Deduct', 'Waive', 'Hold') 
           AND COALESCE(rqi.is_active, 1) = 1
           AND COALESCE(rqi.is_corrected, 0) = 0
-        ORDER BY COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at) DESC, rqi.id DESC
+        GROUP BY rq.id, rqi.decision, rqi.item_name, rqi.employee_code
+        ORDER BY MAX(COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at)) DESC, MIN(rqi.id) DESC
       `);
 
       const correctionHistory = all(`
@@ -194,7 +194,8 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         policies,
         items: all("SELECT *, CASE WHEN available_stock <= minimum_stock THEN 1 ELSE 0 END AS is_low_stock FROM uniform_items ORDER BY item_name, size"),
         stockMovements: all("SELECT * FROM stock_movements ORDER BY created_at DESC, id DESC LIMIT 100"),
-        childDecisionStats: all("SELECT decision, COUNT(*) as count, SUM(quantity) as qty FROM review_queue_items WHERE COALESCE(is_active, 1) = 1 GROUP BY decision"),
+        // Replace childDecisionStats with reviewDecisionStats
+reviewDecisionStats: all("SELECT status as decision, COUNT(*) as count, SUM(excess_qty) as qty FROM review_queue WHERE status IN ('Deducted', 'Waived', 'Held') GROUP BY status"),
         payrollArchives: all(`
           SELECT
             pb.*,
@@ -250,21 +251,22 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
             SELECT
               rqi.decision,
               rqi.employee_code,
-              COALESCE(e.employee_name, rq.employee_name, rqi.employee_code) AS employee_name,
+              COALESCE(MAX(e.employee_name), MAX(rq.employee_name), rqi.employee_code) AS employee_name,
               rqi.item_name,
-              rqi.quantity,
-              COALESCE(up.item_cost, rq.item_cost, 0) AS rate,
-              CASE
+              SUM(rqi.quantity) AS quantity,
+              COALESCE(MAX(up.item_cost), MAX(rq.item_cost), 0) AS rate,
+              SUM(CASE
                 WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(up.item_cost, rq.item_cost, 0)
                 ELSE 0
-              END AS amount,
-              COALESCE(rqi.remarks, rq.remarks, '') AS remarks
+              END) AS amount,
+              COALESCE(MAX(rqi.remarks), MAX(rq.remarks), '') AS remarks
             FROM review_queue_items rqi
             JOIN review_queue rq ON rq.id = rqi.review_queue_id
             LEFT JOIN employees e ON e.employee_code = rqi.employee_code
             LEFT JOIN unit_policies up ON lower(up.unit) = lower(COALESCE(rq.unit, e.unit, '')) AND lower(up.item_name) = lower(rqi.item_name)
             WHERE rqi.decision IN ('Deduct', 'Waive', 'Hold') AND COALESCE(rqi.is_active, 1) = 1
-            ORDER BY COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at) DESC, rqi.id DESC
+            GROUP BY rq.id, rqi.decision, rqi.item_name, rqi.employee_code
+            ORDER BY MAX(COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at)) DESC, MIN(rqi.id) DESC
         `);
 
         if (liveRecords.length === 0) {

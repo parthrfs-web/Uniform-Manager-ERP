@@ -17,15 +17,21 @@ function render() {
   const imports = state.imports || [];
   const todayImports = imports.filter(i => (i.imported_at || "").startsWith(todayStr)).length;
   const monthImports = imports.filter(i => (i.imported_at || "").startsWith(monthStr)).length;
-
+  
   const getChildStat = (dec) => {
      const stat = (state.childDecisionStats || []).find(s => s.decision === dec);
      return stat ? stat.count : 0;
   };
   
-  const deductedCases = getChildStat('Deduct');
-  const heldCount = getChildStat('Hold');
-  const waivedCount = getChildStat('Waive');
+  const getReviewStat = (dec) => {
+     const stat = (state.reviewDecisionStats || []).find(s => s.decision === dec);
+     return stat ? stat.count : 0;
+  };
+  
+  const deductedCases = getReviewStat('Deducted');
+  const heldCount = getReviewStat('Held');
+  const waivedCount = getReviewStat('Waived');
+
   const recoveredTotal = (state.salaryDeductions || []).reduce((sum, row) => sum + Number(row.amount || 0), 0);
 
   // DOM Card Updates

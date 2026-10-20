@@ -248,12 +248,23 @@ window.openItemReviewModal = function(...reviewIds) {
     
     document.getElementById("indRevHistoryRows").innerHTML = historyHtml || '<tr><td colspan="5" style="padding: 10px; border: 1px solid var(--line); color: var(--muted); text-align: center;">No history found for the previous two years.</td></tr>';
 
-    document.getElementById("indRevTransactions").innerHTML = reviews.map((review, index) => {
-        const child = (review.child_items || [])[0];
-        if (!child) return '';
+    document.getElementById("indRevTransactions").innerHTML = reviews.map((review) => {
+        const unitName = review.unit || 'Unknown Unit';
+        const itemName = review.item_name || 'Item';
+        const issued = Number(review.issued_qty || 0);
+        const allowed = review.allowed_qty !== null ? Number(review.allowed_qty) : 'No Policy';
+        const excess = Number(review.excess_qty || 0);
+
         return `
             <div class="panel flush" style="margin-bottom: 16px;">
-                <div style="padding: 16px; border-bottom: 1px solid var(--line); background: #131922;"><span style="font-weight: bold; font-size: 14px; color: var(--ink);">Review ${index + 1}</span></div>
+                <div style="padding: 16px; border-bottom: 1px solid var(--line); background: #131922; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: bold; font-size: 15px; color: var(--ink);">${escapeHtml(unitName)} — ${escapeHtml(itemName)}</span>
+                </div>
+                <div style="padding: 16px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; font-size: 13px; background: var(--panel);">
+                    <div><span style="color: var(--muted); display: block; margin-bottom: 4px;">Issued Quantity</span><strong style="font-size: 16px;">${issued}</strong></div>
+                    <div><span style="color: var(--muted); display: block; margin-bottom: 4px;">Allowed Quantity</span><strong style="font-size: 16px;">${allowed}</strong></div>
+                    <div><span style="color: var(--muted); display: block; margin-bottom: 4px;">Excess Quantity</span><strong class="text-amber" style="font-size: 16px;">${excess}</strong></div>
+                </div>
                 <div style="padding: 16px; border-top: 1px solid var(--line); background: #0f141b;">
                     <div style="margin-bottom: 14px; display: flex; align-items: center; flex-wrap: wrap; font-size: 14px; font-weight: 600;">
                         <span style="color: var(--muted); margin-right: 16px;">Decision:</span>
@@ -270,6 +281,7 @@ window.openItemReviewModal = function(...reviewIds) {
             </div>
         `;
     }).join('');
+    
     document.getElementById("indRevGeneralReason").value = firstReview.reason || '';
     document.getElementById("indRevGeneralReason").disabled = false;
     document.getElementById("indRevApprovedBy").disabled = false;
@@ -288,7 +300,8 @@ window.updateGroupedReviewSummary = function() {
 
     reviews.forEach((review) => {
         const action = Array.from(document.getElementsByName(`group_action_${review.id}`)).find((radio) => radio.checked)?.value || 'Pending';
-        const quantity = Number((review.child_items || [])[0]?.quantity || review.excess_qty || 0);
+        const quantity = Number(review.excess_qty || 0);
+        
         if (action === 'Deduct') {
             deductQty += quantity;
             recoveryAmount += quantity * Number(review.live_rate !== undefined ? review.live_rate : (review.item_cost || 0));
@@ -304,8 +317,7 @@ window.updateGroupedReviewSummary = function() {
 window.saveItemReviewDecision = async function(reviewId) {
     if (!desktopApi || !pendingReviewDecision?.reviews) return;
     const review = pendingReviewDecision.reviews.find((row) => String(row.id) === String(reviewId));
-    const child = (review?.child_items || [])[0];
-    if (!review || !child) return;
+    if (!review) return;
 
     const action = Array.from(document.getElementsByName(`group_action_${review.id}`)).find((radio) => radio.checked)?.value || 'Pending';
     if (action === 'Pending') {
@@ -315,16 +327,18 @@ window.saveItemReviewDecision = async function(reviewId) {
     }
 
     try {
+        const issueDecisions = (review.child_items || []).map(child => ({
+            id: child.id,
+            decision: action,
+            remarks: document.getElementById(`group_remarks_${review.id}`)?.value || '',
+            quantity: child.quantity
+        }));
+
         await window.uniformManager.updateReview({
             id: review.id,
             approved_by: document.getElementById("indRevApprovedBy").value,
             reason: document.getElementById("indRevGeneralReason").value,
-            issue_decisions: [{
-                id: child.id,
-                decision: action,
-                remarks: document.getElementById(`group_remarks_${review.id}`)?.value || '',
-                quantity: child.quantity
-            }],
+            issue_decisions: issueDecisions,
             status: 'Completed'
         });
         state = await window.uniformManager.getState({ distributionLimit });
@@ -341,7 +355,6 @@ window.saveItemReviewDecision = async function(reviewId) {
         showImportError(error.message || "Review decision failed.");
     }
 };
-
 document.getElementById("individualReviewForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!desktopApi || !pendingReviewDecision) return;

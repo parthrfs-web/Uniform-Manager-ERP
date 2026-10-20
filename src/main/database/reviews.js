@@ -83,8 +83,14 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         const review = all("SELECT * FROM review_queue WHERE id = ?", [Number(action.id)])[0];
         if (!review) throw new Error(`Review #${action.id} was not found.`);
         
+        // 1. STRICT LOCK: Prevent double submission from UI latency or rogue renderer calls
+        if (action.status !== 'Pending' && review.status !== 'Pending') {
+            throw new Error(`Review #${action.id} has already been resolved as '${review.status}'. Revert it to Pending before modifying.`);
+        }
+
         if (action.status === 'Pending') {
             db.run("UPDATE review_queue SET status = 'Pending', remarks = NULL, decided_at = NULL WHERE id = ?", [Number(action.id)]);
+// ... (rest of the existing function remains unchanged)
             db.run("UPDATE review_queue_items SET decision = 'Pending', remarks = NULL, reviewed_by = NULL, reviewed_at = NULL WHERE review_queue_id = ?", [Number(action.id)]);
             db.run("DELETE FROM review_decisions WHERE review_id = ?", [Number(action.id)]);
             db.run("DELETE FROM salary_deductions WHERE review_id = ?", [Number(action.id)]);
