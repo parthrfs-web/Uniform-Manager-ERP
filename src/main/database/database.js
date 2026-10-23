@@ -470,9 +470,13 @@ async function createDatabase(userDataPath) {
         WHERE COALESCE(rqi.is_active, 1) = 1 AND COALESCE(rqi.held_quantity, 0) > 0`)
         .filter((row) => Number(row.needs_hold_event) === 1);
       for (const row of legacyHeldRows) {
-        const heldAt = row.reviewed_at || row.created_at || now();
+        const heldAt = row.reviewed_at || row.created_at;
         const parsed = new Date(heldAt);
-        const dueBase = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+        if (!heldAt || Number.isNaN(parsed.getTime())) {
+          console.warn(`Preserved legacy held quantity without scheduling it because review item #${row.id} has no valid hold timestamp.`);
+          continue;
+        }
+        const dueBase = parsed;
         const dueDate = new Date(dueBase.getFullYear(), dueBase.getMonth() + 1, 1);
         db.run(`INSERT INTO review_hold_events
           (review_queue_item_id, review_id, uniform_issue_id, employee_code, item_name, event_type, quantity, reason, actor, due_month, due_year, created_at)
@@ -557,49 +561,9 @@ async function createDatabase(userDataPath) {
     audit("Zero Quantity Issue Rows Purged", `Removed ${zeroCount} zero-quantity distribution rows.`);
   }
 
-  function ensureDefaultPoliciesForIssueRows(importId = null) {
-    const rows = all(
-      `SELECT DISTINCT TRIM(unit) AS unit, TRIM(item_name) AS item_name
-       FROM uniform_issues
-       WHERE TRIM(COALESCE(unit, '')) <> ''
-         AND TRIM(COALESCE(item_name, '')) <> ''
-         ${importId ? "AND import_id = ?" : ""}`,
-      importId ? [Number(importId)] : []
-    ).filter((row) => !isIgnoredIssueItemName(row.item_name));
-    if (!rows.length) return 0;
-
-    const stmt = db.prepare(
-      `INSERT INTO unit_policies (unit, item_name, yearly_entitlement, item_cost)
-       VALUES (?, ?, 0, 0)`
-    );
-    let created = 0;
-    const processed = new Set();
-    
-    db.run("BEGIN TRANSACTION");
-    try {
-      rows.forEach((row) => {
-        const key = `${String(row.unit).toLowerCase()}|${String(row.item_name).toLowerCase()}`;
-        if (processed.has(key)) return;
-        processed.add(key);
-
-        const before = scalar(
-          "SELECT COUNT(*) FROM unit_policies WHERE lower(unit) = lower(?) AND lower(item_name) = lower(?)",
-          [row.unit, row.item_name]
-        );
-        if (before === 0) {
-          stmt.run([row.unit, row.item_name]);
-          created += 1;
-        }
-      });
-      db.run("COMMIT");
-    } catch (error) {
-      db.run("ROLLBACK");
-      throw error;
-    } finally {
-      stmt.free();
-    }
-    return created;
-  }
+  // Kept as a compatibility helper for callers from older renderer builds.
+  // A missing unit/item policy is not evidence of a zero allowance.
+  function ensureDefaultPoliciesForIssueRows() { return 0; }
 
   function extractAmount(text) {
     const match = String(text || "").match(/(?:Rs\.?|INR|Amount)\s*[:.-]?\s*([0-9]+(?:\.[0-9]+)?)/i);
@@ -750,11 +714,8 @@ async function createDatabase(userDataPath) {
 
   purgeInvalidImportedIssueItems();
   purgeZeroQuantityIssues();
-  const startupPolicyCount = ensureDefaultPoliciesForIssueRows();
-  if (startupPolicyCount) {
-    audit("Default Policies Created", `${startupPolicyCount} existing unit/item policy rows created with allowed qty 0.`);
-    save();
-  }
+  // Missing unit/item policies must remain missing: a synthetic zero row
+  // would turn an unknown allowance into a confirmed zero-allowance policy.
 
   const moduleContext = { db, dbPath, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, ensureDefaultPoliciesForIssueRows, extractAmount, generateDeductionPdf };
 
@@ -764,6 +725,8 @@ async function createDatabase(userDataPath) {
   reviewModule.reopenDueHeldReviews();
   const importModule = createImports(moduleContext);
   const policyModule = createPolicies(moduleContext);
+  const annualPolicySync = policyModule.ensureAnnualPoliciesForRecognizedItems();
+  if (Number(annualPolicySync?.reclassified || 0) > 0) importModule.recalculateReviews();
   const inventoryModule = createInventory(moduleContext);
   const reportModule = createReports(moduleContext);
   const auditModule = createAudit(moduleContext);

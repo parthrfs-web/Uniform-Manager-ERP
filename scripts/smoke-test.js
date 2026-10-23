@@ -28,6 +28,33 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
   if (state.items.length === 0) throw new Error("Default item master was not created.");
   if (!fs.existsSync(db.dbPath)) throw new Error("SQLite file was not persisted.");
 
+  const dashboardActivityDir = fs.mkdtempSync(path.join(os.tmpdir(), "uniform-manager-dashboard-activity-"));
+  const dashboardActivityPath = path.join(dashboardActivityDir, "distribution-periods.xlsx");
+  const dashboardActivityWorkbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(dashboardActivityWorkbook, XLSX.utils.aoa_to_sheet([
+    ["Employee Code", "Employee Name", "Father Name", "Unit", "Month", "Shirt"],
+    ["DA004", "Activity Four", "Father Four", "AMNS", "Sep-25", 1],
+    ["DA001", "Activity One", "Father One", "Reliance", "Apr-2026", 2],
+    ["DA002", "Activity Two", "Father Two", "Reliance", "May-2026", 3],
+    ["DA003", "Activity Three", "Father Three", "AMNS", "Sep-26", 4],
+  ]), "Distribution");
+  XLSX.writeFile(dashboardActivityWorkbook, dashboardActivityPath);
+  const dashboardActivityDb = await createDatabase(dashboardActivityDir);
+  importWorkbook(dashboardActivityPath, dashboardActivityDb);
+  dashboardActivityDb.updateDistributionRow({
+    key: { employee_code: "DA001", unit: "Reliance", issue_month: null, issue_year: null, issue_period_label: "Jul 2026" },
+    quantities: { Shirt: 5 },
+  });
+  const dashboardActivity = dashboardActivityDb.getState().dashboardDistributionActivity || [];
+  const dashboardActivityByPeriod = new Map(dashboardActivity.map((row) => [row.period, Number(row.issued_quantity)]));
+  if (dashboardActivityByPeriod.get("2025-09") !== 1 || dashboardActivityByPeriod.get("2026-04") !== 2 || dashboardActivityByPeriod.get("2026-05") !== 3 || dashboardActivityByPeriod.get("2026-07") !== 5 || dashboardActivityByPeriod.get("2026-09") !== 4) {
+    throw new Error("Dashboard distribution activity did not aggregate persisted month/year periods correctly.");
+  }
+  if (dashboardActivity.some((row, index) => index > 0 && dashboardActivity[index - 1].period.localeCompare(row.period) > 0)) {
+    throw new Error("Dashboard distribution activity periods were not sorted chronologically across financial years.");
+  }
+  console.log("PASS: Dashboard distribution activity aggregates imported and label-only periods chronologically.");
+
   const genericHeaderPath = path.join(tmp, "generic-name-header.xlsx");
   const genericHeaderWorkbook = XLSX.utils.book_new();
   const genericHeaderSheet = XLSX.utils.aoa_to_sheet([
@@ -116,17 +143,20 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
   policyDb.upsertItem({ item_code: "HELMET-RED-TEST", item_name: "Helmet Red", category: "Uniform", size: "Standard", cost: 0 });
   let policyState = policyDb.getState();
   const defaultPolicy = policyState.policies.find((row) => row.unit === "NEW TEST UNIT" && row.item_name === "Helmet Red");
-  if (!defaultPolicy || Number(defaultPolicy.yearly_entitlement) !== 0) {
-    throw new Error("Import did not auto-create default unit/item policy with allowed qty 0.");
+  if (defaultPolicy) {
+    throw new Error("Import incorrectly created a zero unit/item policy for an unknown allowance.");
   }
-  if (!policyState.annualPolicies.some((row) => row.item_name === "Helmet Red" && Number(row.financial_year) === 2025 && Number(row.allowed_quantity) === 0)) {
-    throw new Error("Imported item did not receive its default annual item policy for the applicable financial year.");
+  if (!policyState.annualPolicies.some((row) => row.item_name === "Helmet Red" && Number(row.financial_year) === 2025 && Number(row.allowed_quantity) === 0 && row.status === "Unconfigured")) {
+    throw new Error("Imported item did not receive an explicitly unconfigured annual row for the applicable financial year.");
   }
-  if (!policyState.reviews.some((row) => row.unit === "NEW TEST UNIT" && row.item_name === "Helmet Red" && Number(row.allowed_qty) === 0)) {
-    throw new Error("Auto-created default policy did not produce allowed-0 entitlement review.");
+  if (policyState.reviews.some((row) => row.status === "Pending" && row.unit === "NEW TEST UNIT" && row.item_name === "Helmet Red")) {
+    throw new Error("A missing policy was incorrectly treated as a zero allowance and created a pending review.");
   }
   policyDb.upsertAnnualPolicy({ item_name: "Helmet Red", financial_year: 2025, allowed_quantity: 0 });
   policyDb.recalculateReviews();
+  if (!policyDb.getState().reviews.some((row) => row.status === "Pending" && row.unit === "NEW TEST UNIT" && row.item_name === "Helmet Red" && Number(row.allowed_qty) === 0)) {
+    throw new Error("An explicitly configured zero allowance did not create a genuine excess review.");
+  }
   policyDb.upsertAnnualPolicy({ item_name: "Helmet Red", financial_year: 2025, allowed_quantity: 1 });
   const regeneratedReviews = policyDb.recalculateReviews();
   policyState = policyDb.getState();
@@ -197,7 +227,7 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
       "Reliance",
       "SATISH SHARMA",
       index % 10 === 0 ? 17 : 0,
-      index % 5 === 0 ? 45931 : 2024,
+      index % 5 === 0 ? 45931 : "Jul-2024",
       index === 1 ? 5 : 2,
       2,
       index % 3 ? 1 : 0,
@@ -207,6 +237,14 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
   XLSX.utils.book_append_sheet(mixedWorkbook, XLSX.utils.aoa_to_sheet(deductionRows), "DEDUCTION");
   XLSX.utils.book_append_sheet(mixedWorkbook, XLSX.utils.aoa_to_sheet(distributionRows), "DISTRIBUTION");
   XLSX.writeFile(mixedWorkbook, mixedWorkbookPath);
+  // This fixture asserts an actual Shirt excess under Item-wise Annual mode.
+  // Configure the allowance explicitly for its imported year instead of
+  // relying on an implicit missing-policy-as-zero default.
+  for (const financial_year of [2024, 2025, 2026]) {
+    db.upsertAnnualPolicy({ item_name: "Shirt", financial_year, allowed_quantity: 2, status: "Active" });
+    db.upsertAnnualPolicy({ item_name: "Pant", financial_year, allowed_quantity: 2, status: "Active" });
+    db.upsertAnnualPolicy({ item_name: "Shoes", financial_year, allowed_quantity: 1, status: "Active" });
+  }
   const inspection = inspectWorkbook(mixedWorkbookPath);
   if (!inspection.candidates || !inspection.candidates.length) {
     throw new Error("Workbook inspection did not return sheet candidates.");
@@ -265,6 +303,7 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
   XLSX.utils.book_append_sheet(periodWorkbook, XLSX.utils.aoa_to_sheet(periodRows), "DISTRIBUTION");
   XLSX.writeFile(periodWorkbook, periodWorkbookPath);
   const periodDb = await createDatabase(fs.mkdtempSync(path.join(os.tmpdir(), "uniform-manager-period-test-")));
+  periodDb.upsertAnnualPolicy({ item_name: "Shirt", financial_year: 2025, allowed_quantity: 0, status: "Active" });
   importWorkbook(periodWorkbookPath, periodDb);
   const periodState = periodDb.getState();
   if (!periodState.uniformIssues.some((row) => row.employee_code === "P001" && row.issue_month === 12 && row.issue_year === 2025)) {
@@ -416,7 +455,7 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
   perItemDb.recalculateReviews();
   const perItemReviews = perItemDb.getState({ distributionLimit: 1000 }).reviews.filter((row) => row.employee_code === "PI001");
   const janReviews = perItemReviews.filter((row) => row.issue_month === 1 && row.issue_year === 2026);
-  const expectedJanReviews = { Pant: 2, Shirt: 2, Whistle: 2, Reflector: 10 };
+  const expectedJanReviews = { Pant: 4, Shirt: 2, Whistle: 2, Reflector: 10 };
   Object.entries(expectedJanReviews).forEach(([itemName, expectedQty]) => {
     const review = janReviews.find((row) => row.item_name === itemName);
     if (!review) throw new Error(`Missing per-item review row for ${itemName}.`);
@@ -424,9 +463,11 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
       throw new Error(`${itemName} review did not store per-item issued/allowed/pending values.`);
     }
   });
-  const febPantReview = perItemReviews.find((row) => row.item_name === "Pant" && row.issue_month === 2 && row.issue_year === 2026);
-  if (!febPantReview || Number(febPantReview.issued_qty) !== 2 || Number(febPantReview.excess_qty) !== 2) {
-    throw new Error("Review Queue aggregated Pant pending quantity across periods instead of storing the item period value.");
+  const pantQueueRows = perItemReviews.filter((row) => row.item_name === "Pant");
+  const pantDetail = perItemDb.getReviewQueueStage2("PI001").find((row) => row.item_name === "Pant");
+  if (pantQueueRows.length !== 1 || !pantDetail || Number(pantDetail.issued_qty) !== 4
+      || pantDetail.history_items.filter((entry) => [1, 2].includes(Number(entry.issue_month))).length !== 2) {
+    throw new Error("Annual Review Queue scope did not reconcile Pant quantities with both distribution months in the same financial year.");
   }
 
   const mixedSummary = importWorkbook(mixedWorkbookPath, db);
@@ -532,8 +573,8 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
   if (!issueState.reviews.some((row) => row.category === "Excess Entitlement")) {
     throw new Error("Review queue did not categorize excess entitlement records.");
   }
-  if (!issueState.reviewSummary["Excess Entitlement"]?.pending) {
-    throw new Error("Review summary did not count pending excess entitlement records.");
+  if (!issueState.reviews.some((row) => row.category === "Excess Entitlement" && row.status === "Pending")) {
+    throw new Error("Review state did not expose the pending excess entitlement record.");
   }
   const excessReview = issueState.reviews.find((row) => String(row.reason).includes("entitlement exceeded"));
   db.updateReview({

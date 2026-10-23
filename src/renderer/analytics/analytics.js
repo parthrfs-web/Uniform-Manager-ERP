@@ -488,7 +488,7 @@ document.addEventListener('submit', async (e) => {
         AnalyticsState.filters[reportType] = filters;
 
         try {
-            if (typeof startProgress === 'function') startProgress();
+            if (typeof startProgress === 'function') startProgress({ title: "Generating Report", description: `Loading filtered ${reportType.replace(/_/g, " ")} data from the local database.`, kicker: "ANALYTICS REPORT" });
             
             // Backend call
             const data = await window.uniformManager.getAnalyticsData(reportType, filters);
@@ -602,7 +602,7 @@ document.addEventListener('click', async (e) => {
         }
 
         try {
-            if (typeof startProgress === 'function') startProgress();
+            if (typeof startProgress === 'function') startProgress({ title: "Exporting Report", description: "Preparing the selected report as an Excel workbook.", kicker: "LOCAL FILE EXPORT" });
             const res = await window.uniformManager.exportAnalyticsExcel(config);
             if (typeof stopProgress === 'function') stopProgress();
             if (!res.canceled && typeof toast === 'function') toast("Excel exported successfully.");
@@ -658,7 +658,7 @@ document.addEventListener('click', async (e) => {
             const config = { filename: `${titles[reportType]}_Review_Decision_Register_${period.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`, lines };
 
             try {
-                if (typeof startProgress === 'function') startProgress();
+                if (typeof startProgress === 'function') startProgress({ title: "Exporting Decision Register", description: "Preparing the filtered register as a PDF document.", kicker: "LOCAL FILE EXPORT" });
                 const res = await window.uniformManager.exportDecisionRegisterPdf(config);
                 if (typeof stopProgress === 'function') stopProgress();
                 if (!res.canceled && typeof toast === 'function') toast("PDF exported successfully.");
@@ -696,7 +696,7 @@ document.addEventListener('click', async (e) => {
             };
 
             try {
-                if (typeof startProgress === 'function') startProgress();
+                if (typeof startProgress === 'function') startProgress({ title: "Exporting Decision Register", description: "Preparing the filtered register as an Excel workbook.", kicker: "LOCAL FILE EXPORT" });
                 const res = await window.uniformManager.exportAnalyticsExcel(config);
                 if (typeof stopProgress === 'function') stopProgress();
                 if (!res.canceled && typeof toast === 'function') toast("Excel exported successfully.");

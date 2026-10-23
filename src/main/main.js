@@ -5,6 +5,7 @@ const path = require("path");
 const { fork } = require("child_process");
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { createDatabase } = require("./database/database");
+const { localDateKey, millisecondsUntilNextLocalDay } = require("./database/hold-review-dates");
 const { exportToExcel, exportAnalyticsExcel, exportDecisionRegisterPdf } = require('./services/export-engine');
 const { applyBulkPolicyChange, persistThenRecalculate } = require('./services/review-queue-updates');
 const { buildValidatedImport } = require("./import/smart-importer");
@@ -12,6 +13,38 @@ const { parseActualPriceFile } = require("./services/actual-price-import");
 
 let db;
 let pendingImportCache = null; 
+let lastHoldReconciliationDate = null;
+let holdDateBoundaryTimer = null;
+
+function reconcileDueHoldsAfterDateChange() {
+  if (!db) return 0;
+  const today = localDateKey(new Date());
+  if (today === lastHoldReconciliationDate) return 0;
+
+  const reopenedQuantity = db.reopenDueHeldReviews();
+  lastHoldReconciliationDate = today;
+  if (reopenedQuantity > 0) {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send("review:held-quantities-reopened", { reopenedQuantity, date: today });
+    }
+  }
+  return reopenedQuantity;
+}
+
+function scheduleHoldDateBoundaryCheck() {
+  if (holdDateBoundaryTimer) clearTimeout(holdDateBoundaryTimer);
+  if (!db) return;
+  holdDateBoundaryTimer = setTimeout(() => {
+    try {
+      reconcileDueHoldsAfterDateChange();
+    } catch (error) {
+      console.error("Due held-quantity reconciliation failed:", error);
+    } finally {
+      scheduleHoldDateBoundaryCheck();
+    }
+  }, millisecondsUntilNextLocalDay(new Date()) + 25);
+  holdDateBoundaryTimer.unref?.();
+}
 
 function createWindow() {
     const mainWindow = new BrowserWindow({
@@ -35,8 +68,19 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   db = await createDatabase(app.getPath("userData"));
+  lastHoldReconciliationDate = localDateKey(new Date());
+  scheduleHoldDateBoundaryCheck();
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+});
+
+app.on("browser-window-focus", () => {
+  try {
+    reconcileDueHoldsAfterDateChange();
+  } catch (error) {
+    console.error("Due held-quantity reconciliation failed after focus:", error);
+  }
+  scheduleHoldDateBoundaryCheck();
 });
 
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
@@ -56,7 +100,16 @@ const yieldEventLoop = () => new Promise(resolve => setTimeout(resolve, 0));
 const buildProgressCb = (event, title = "Processing") => (importId, idx, totalImports, processed, totalRows) => {
    const baseProg = ((idx - 1) / totalImports) * 100;
    const subProg = totalRows > 0 ? (processed / totalRows) * (100 / totalImports) : 0;
-   event.sender.send("import-progress", { progress: baseProg + subProg, status: `${title} (${idx}/${totalImports}): ${processed}/${totalRows} rows...` });
+   event.sender.send("import-progress", {
+     operationTitle: title === "Recalculating review queue" ? "Recalculating Entitlements" : title,
+     operationDescription: "Applying the saved application rules to the affected records.",
+     operationKicker: "REVIEW QUEUE UPDATE",
+     stage: title,
+     progress: baseProg + subProg,
+     recordsProcessed: processed,
+     recordsTotal: totalRows,
+     status: `${title} (${idx}/${totalImports}): ${processed}/${totalRows} rows...`,
+   });
 };
 
 ipcMain.handle("app:getState", (_event, options = {}) => handleSafe(() => db.getState(options)));
@@ -79,7 +132,7 @@ function runImportWorker(message) {
   });
 }
 
-ipcMain.handle("app:chooseAndImportWorkbook", () => handleSafe(async () => {
+ipcMain.handle("app:chooseAndImportWorkbook", (event) => handleSafe(async () => {
   const result = await dialog.showOpenDialog({
     title: "Import Employee Master",
     filters: [{ name: "Excel Workbooks", extensions: ["xlsx", "xls", "xlsm", "xlsb", "csv"] }],
@@ -90,6 +143,12 @@ ipcMain.handle("app:chooseAndImportWorkbook", () => handleSafe(async () => {
       return { canceled: true };
   }
   
+  event.sender.send("import-progress", {
+    operationTitle: "Analyzing Workbook",
+    operationDescription: "Inspecting worksheets and identifying employee distribution records.",
+    operationKicker: "WORKBOOK ANALYSIS",
+    status: "Reading workbook structure...",
+  });
   const inspectionRaw = await runImportWorker({ type: "inspect-workbook", filePath: result.filePaths[0] });
   const inspection = inspectionRaw || {};
   inspection.candidates = Array.isArray(inspection.candidates) ? inspection.candidates : [];
@@ -97,8 +156,14 @@ ipcMain.handle("app:chooseAndImportWorkbook", () => handleSafe(async () => {
   return { canceled: false, inspection };
 }));
 
-ipcMain.handle("app:previewImportSelectedSheet", (_event, request) => handleSafe(async () => {
+ipcMain.handle("app:previewImportSelectedSheet", (event, request) => handleSafe(async () => {
   const start = Date.now();
+  event.sender.send("import-progress", {
+    operationTitle: "Validating Records",
+    operationDescription: "Checking employee rows and item quantities against current import rules.",
+    operationKicker: "WORKBOOK VALIDATION",
+    status: `Reading worksheet ${request.sheetName}...`,
+  });
   const parsedRaw = await runImportWorker({ type: "parse-workbook", filePath: request.filePath, sheetName: request.sheetName });
 
   const parsed = parsedRaw || {};
@@ -145,7 +210,15 @@ ipcMain.handle("app:commitImport", async (event) => {
         throw new Error(safeData.validationErrors.find(e => e.reason.includes("CRITICAL AUDIT FAILURE")).reason);
       }
 
-      event.sender.send("import-progress", { progress: 2, status: "Checking for duplicate imports..." });
+      const sendImportProgress = (data) => event.sender.send("import-progress", {
+        operationTitle: "Importing Uniform Records",
+        operationDescription: "Saving validated employees and distributions, then calculating review quantities.",
+        operationKicker: "DATABASE IMPORT",
+        stageCount: 5,
+        ...data,
+      });
+
+      sendImportProgress({ progress: 2, stageIndex: 1, stage: "Checking workbook identity", status: "Checking for duplicate imports..." });
       await yieldEventLoop();
 
       if (safeData.summary.importHash && typeof db.hasImportHash === 'function' && db.hasImportHash(safeData.summary.importHash)) {
@@ -169,7 +242,8 @@ ipcMain.handle("app:commitImport", async (event) => {
         updated += res.updated || 0;
         
         const progress = 5 + (30 * (Math.min(i + EMP_CHUNK, empCount) / Math.max(empCount, 1)));
-        event.sender.send("import-progress", { progress, status: `Importing employees (${Math.min(i + EMP_CHUNK, empCount)}/${empCount})...` });
+        const processed = Math.min(i + EMP_CHUNK, empCount);
+        sendImportProgress({ progress, stageIndex: 2, stage: "Saving employee records", recordsProcessed: processed, recordsTotal: empCount, status: `Importing employees (${processed}/${empCount})...` });
         await yieldEventLoop();
       }
       safeData.summary.inserted = inserted;
@@ -182,12 +256,13 @@ ipcMain.handle("app:commitImport", async (event) => {
           const chunk = safeData.reviews.slice(i, i + REV_CHUNK);
           if (typeof db.bulkCreateReviews === 'function') db.bulkCreateReviews(chunk);
           const progress = 35 + (5 * (Math.min(i + REV_CHUNK, revCount) / revCount));
-          event.sender.send("import-progress", { progress, status: `Logging basic reviews (${Math.min(i + REV_CHUNK, revCount)}/${revCount})...` });
+          const processed = Math.min(i + REV_CHUNK, revCount);
+          sendImportProgress({ progress, stageIndex: 2, stage: "Saving employee records", recordsProcessed: processed, recordsTotal: revCount, status: `Logging basic reviews (${processed}/${revCount})...` });
           await yieldEventLoop();
         }
       }
 
-      event.sender.send("import-progress", { progress: 40, status: "Saving import metadata..." });
+      sendImportProgress({ progress: 40, stageIndex: 3, stage: "Recording import details", status: "Saving import metadata..." });
       await yieldEventLoop();
       
       const importId = db.recordImport(safeData.summary);
@@ -199,29 +274,34 @@ ipcMain.handle("app:commitImport", async (event) => {
           const chunk = safeData.validIssues.slice(i, i + ISS_CHUNK);
           db.bulkCreateUniformIssues(chunk, importId);
           const progress = 40 + (35 * (Math.min(i + ISS_CHUNK, issCount) / issCount));
-          event.sender.send("import-progress", { progress, status: `Importing uniform issues (${Math.min(i + ISS_CHUNK, issCount)}/${issCount})...` });
+          const processed = Math.min(i + ISS_CHUNK, issCount);
+          sendImportProgress({ progress, stageIndex: 3, stage: "Saving uniform distributions", recordsProcessed: processed, recordsTotal: issCount, status: `Importing uniform issues (${processed}/${issCount})...` });
           await yieldEventLoop();
         }
       }
 
-      event.sender.send("import-progress", { progress: 75, status: "Configuring unit policies..." });
+      sendImportProgress({ progress: 75, stageIndex: 4, stage: "Applying entitlement policies", status: "Preparing saved policy configuration..." });
       await yieldEventLoop();
-      db.ensureDefaultPoliciesForImport(importId);
       
-      event.sender.send("import-progress", { progress: 80, status: "Generating review queue... (this may take a moment)" });
+      sendImportProgress({ progress: 80, stageIndex: 4, stage: "Calculating review quantities", status: "Generating review queue... (this may take a moment)" });
       await yieldEventLoop();
       
       if (typeof db.updateImportReviewsCount === 'function') {
         const generated = await db.evaluateEntitlementsForImport(importId, (processed, total) => {
              const subProgress = 80 + (15 * (processed / total));
-             event.sender.send("import-progress", { progress: subProgress, status: `Calculating entitlements (${processed}/${total})...` });
-        });
+             sendImportProgress({ progress: subProgress, stageIndex: 4, stage: "Calculating review quantities", recordsProcessed: processed, recordsTotal: total, status: `Calculating entitlements (${processed}/${total})...` });
+        }, null, { deferHoldReconciliation: true });
         db.updateImportReviewsCount(importId, generated);
       } else {
-        await db.evaluateEntitlementsForImport(importId);
+        await db.evaluateEntitlementsForImport(importId, null, null, { deferHoldReconciliation: true });
       }
 
-      event.sender.send("import-progress", { progress: 95, status: "Finalizing and saving database..." });
+      // Hold scheduling is independent of workbook dates; reconcile once the
+      // import and its authoritative review recalculation have both succeeded.
+      db.reopenDueHeldReviews();
+      lastHoldReconciliationDate = localDateKey(new Date());
+
+      sendImportProgress({ progress: 95, stageIndex: 5, stage: "Finalizing local records", status: "Finalizing and saving database..." });
       await yieldEventLoop();
 
       safeData.summary.durationMs = (safeData.durationMs || 0) + (Date.now() - start);
@@ -229,7 +309,7 @@ ipcMain.handle("app:commitImport", async (event) => {
       safeData.summary.duplicateCount = safeData.summary.duplicateWorksheetRows || 0;
 
       pendingImportCache = null;
-      event.sender.send("import-progress", { progress: 100, status: "Complete!" });
+      sendImportProgress({ progress: 100, stageIndex: 5, stage: "Finalizing local records", status: "Complete!" });
       await yieldEventLoop();
       
       return { canceled: false, summary: safeData.summary, state: db.getState() };
@@ -380,7 +460,7 @@ ipcMain.handle("app:upsertAnnualPolicy", async (event, policy) => handleSafe(asy
       || Number(previous.financial_year) !== Number(saved.financial_year)
       || Number(previous.allowed_quantity) !== Number(saved.allowed_quantity)
       || String(previous.status || 'Active').toLowerCase() !== String(saved.status || 'Active').toLowerCase()
-    : Number(saved.allowed_quantity) > 0;
+    : String(saved.status || 'Active').toLowerCase() === 'active';
   const generated = changed ? await db.recalculateReviews(buildProgressCb(event, "Updating Review Queue")) : 0;
   return { generated, state: db.getState() };
 }));
@@ -484,9 +564,10 @@ ipcMain.handle("app:resetOperationalData", () => handleSafe(async () => {
   if (result.response !== 1) return { canceled: true, state: db.getState() };
   db.resetOperationalData(); return { canceled: false, state: db.getState() };
 }));
-ipcMain.handle("app:resetItemsAndPolicies", () => handleSafe(() => {
+ipcMain.handle("app:resetItemsAndPolicies", async (event) => handleSafe(async () => {
   const result = db.resetItemsAndPolicies();
-  return { ...result, state: db.getState() };
+  const generated = await db.recalculateReviews(buildProgressCb(event, "Recalculating Review Queue"));
+  return { ...result, generated, state: db.getState() };
 }));
 
 ipcMain.handle("app:exportExcel", async (event, config) => {

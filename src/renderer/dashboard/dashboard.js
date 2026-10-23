@@ -53,11 +53,15 @@ function render() {
 
   document.getElementById("dashUnits").textContent = uniqueUnits;
   document.getElementById("dashInventoryItems").textContent = (state.items || []).length;
-  document.getElementById("dashPolicies").textContent = (state.policies || []).length;
+  const configuredAnnualPolicies = (state.annualPolicies || []).filter((policy) =>
+    String(policy.status || "Active").trim().toLowerCase() === "active"
+  ).length;
+  document.getElementById("dashPolicies").textContent = (state.policies || []).length + configuredAnnualPolicies;
 
   // Delegated Panel Updates
   renderLatestImport();
   renderTopLists();
+  renderDashboardAnalytics();
 
   // Rendering Other Sub-modules
   renderEmployees();
@@ -66,6 +70,86 @@ function render() {
   renderReviews();
   renderPolicies();
   renderItems();
+}
+
+let dashboardActivityRefreshAttempted = false;
+
+function renderDashboardAnalytics() {
+  const activityHost = document.getElementById("dashboardDistributionChart");
+  const reviewHost = document.getElementById("dashboardReviewChart");
+  if (activityHost) {
+    if (!Array.isArray(state.dashboardDistributionActivity)) {
+      activityHost.innerHTML = '<div class="dashboard-chart-empty">Refreshing distribution activity…</div>';
+      if (!dashboardActivityRefreshAttempted && window.uniformManager?.getState) {
+        dashboardActivityRefreshAttempted = true;
+        const distributionLimit = window.distributionLimit || 1000;
+        window.uniformManager.getState({ distributionLimit }).then((freshState) => {
+          if (freshState) state = freshState;
+          renderDashboardAnalytics();
+        }).catch(() => {
+          activityHost.innerHTML = '<div class="dashboard-chart-empty">Distribution activity could not be loaded. Reopen the Dashboard to refresh its data.</div>';
+        });
+      } else if (dashboardActivityRefreshAttempted) {
+        activityHost.innerHTML = '<div class="dashboard-chart-empty">Distribution activity data was not returned by the current application session. Restart the application to refresh it.</div>';
+      }
+      return;
+    }
+    const rows = (state.dashboardDistributionActivity || []).slice(-12);
+    if (!rows.length) {
+      activityHost.innerHTML = '<div class="dashboard-chart-empty">No dated distribution records are available yet.</div>';
+    } else {
+      const width = 720;
+      const height = 224;
+      const left = 44;
+      const right = 12;
+      const top = 14;
+      const bottom = 36;
+      const plotWidth = width - left - right;
+      const plotHeight = height - top - bottom;
+      const maxValue = Math.max(1, ...rows.map((row) => Number(row.issued_quantity || 0)));
+      const ceiling = Math.ceil(maxValue / 5) * 5 || maxValue;
+      const points = rows.map((row, index) => {
+        const x = left + (rows.length === 1 ? plotWidth / 2 : index * plotWidth / (rows.length - 1));
+        const y = top + plotHeight - Number(row.issued_quantity || 0) / ceiling * plotHeight;
+        return { x, y, row };
+      });
+      const line = points.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
+      const area = `${line} L${points[points.length - 1].x.toFixed(1)},${(top + plotHeight).toFixed(1)} L${points[0].x.toFixed(1)},${(top + plotHeight).toFixed(1)} Z`;
+      const ticks = [0, ceiling / 2, ceiling].map((value) => {
+        const y = top + plotHeight - value / ceiling * plotHeight;
+        return `<g><line x1="${left}" x2="${width - right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" class="chart-gridline"/><text x="${left - 9}" y="${(y + 4).toFixed(1)}" text-anchor="end" class="chart-axis-label">${Math.round(value).toLocaleString()}</text></g>`;
+      }).join("");
+      const labels = points.map(({ x, row }) => {
+        const [year, month] = String(row.period).split("-").map(Number);
+        const label = Number.isInteger(year) && Number.isInteger(month)
+          ? new Date(year, month - 1, 1).toLocaleDateString(undefined, { month: "short", year: "2-digit" })
+          : String(row.period);
+        return `<text x="${x.toFixed(1)}" y="${height - 9}" text-anchor="middle" class="chart-axis-label">${escapeHtml(label)}</text>`;
+      }).join("");
+      const dots = points.map(({ x, y, row }) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" class="chart-point"><title>${escapeHtml(row.period)}: ${Number(row.issued_quantity || 0).toLocaleString()} issued</title></circle>`).join("");
+      const total = rows.reduce((sum, row) => sum + Number(row.issued_quantity || 0), 0);
+      activityHost.innerHTML = `<div class="chart-summary"><strong>${total.toLocaleString()}</strong><span>units across ${rows.length} recorded month${rows.length === 1 ? "" : "s"}</span></div><svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="Monthly distribution issued quantity for the 12 most recent months with records">${ticks}<path d="${area}" class="chart-area"/><path d="${line}" class="chart-line"/>${dots}${labels}</svg>`;
+    }
+  }
+
+  if (reviewHost) {
+    const values = state.dashboardReviewQuantities || {};
+    const rows = [
+      { label: "Pending review", value: Number(values.pending_quantity || 0), color: "pending" },
+      { label: "Deducted", value: Number(values.deducted_quantity || 0), color: "deducted" },
+      { label: "Waived", value: Number(values.waived_quantity || 0), color: "waived" },
+      { label: "Held", value: Number(values.held_quantity || 0), color: "held" },
+    ];
+    const total = rows.reduce((sum, row) => sum + row.value, 0);
+    if (!total) {
+      reviewHost.innerHTML = '<div class="dashboard-chart-empty">No review quantities have been recorded.</div>';
+    } else {
+      reviewHost.innerHTML = `<div class="review-total"><strong>${total.toLocaleString()}</strong><span>review quantities</span></div><div class="review-breakdown">${rows.map((row) => {
+        const share = row.value / total * 100;
+        return `<div class="review-breakdown-row"><div class="review-breakdown-label"><span><i class="review-dot ${row.color}"></i>${row.label}</span><strong>${row.value.toLocaleString()}</strong></div><div class="review-track"><span class="review-fill ${row.color}" style="width:${share.toFixed(2)}%"></span></div></div>`;
+      }).join("")}</div>`;
+    }
+  }
 }
 
 function renderLatestImport() {
@@ -237,11 +321,11 @@ function renderItemsAndPoliciesResetStep(step) {
 
   if (step === 1) {
     title.textContent = "Reset Items & Policies";
-    message.textContent = "This will permanently delete every Inventory Item and every Unit Policy.\n\nOperational employee data will NOT be deleted.";
+    message.textContent = "This will permanently delete every Inventory Item and every Unit Policy. Annual Item Entitlements and Actual Item Prices will be kept.\n\nOperational employee data will NOT be deleted.";
     confirmButton.textContent = "Continue";
   } else if (step === 2) {
     title.textContent = "Final Warning";
-    message.textContent = "After deleting Items and Policies,\n\nautomatic entitlement calculations may stop until new master data is created.\n\nOnly continue if you are preparing the application for a new company.";
+    message.textContent = "After deleting inventory items and unit policies, Annual Item Entitlements and Actual Item Prices will remain saved.\n\nAutomatic entitlement calculations may stop until new master data is created.\n\nOnly continue if you are preparing the application for a new company.";
     confirmButton.textContent = "I Understand";
   } else {
     title.textContent = "Type To Confirm";
@@ -279,7 +363,7 @@ document.getElementById("confirmItemsAndPoliciesResetBtn")?.addEventListener("cl
     state = result.state || await window.uniformManager.getState({ distributionLimit });
     closeItemsAndPoliciesResetModal();
     render();
-    toast("Items and Policies have been reset successfully.");
+    toast(`Items and Policies reset. Cleared ${Number(result.deletedAnnualPolicies) || 0} annual entitlement(s).`);
   } catch (error) {
     showImportError(error.message || "Items and Policies reset failed.");
   }

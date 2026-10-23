@@ -18,6 +18,11 @@ contextBridge.exposeInMainWorld("uniformManager", {
   getReviewQueueStage2: (code) => safeInvoke("app:getReviewQueueStage2", code),
   getReviewQueueStage3: (req) => safeInvoke("app:getReviewQueueStage3", req),
   getHeldRecords: () => safeInvoke("app:getHeldRecords"),
+  onHeldQuantitiesReopened: (callback) => {
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on("review:held-quantities-reopened", listener);
+    return () => ipcRenderer.removeListener("review:held-quantities-reopened", listener);
+  },
   reviewHeldNow: (payload) => safeInvoke("app:reviewHeldNow", payload),
   upsertPolicy: (policy) => safeInvoke("app:upsertPolicy", policy),
   deletePolicy: (policyId) => safeInvoke("app:deletePolicy", policyId),

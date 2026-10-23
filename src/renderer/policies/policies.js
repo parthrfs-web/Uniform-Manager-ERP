@@ -4,8 +4,12 @@ let pendingActualPriceImport = null;
 let actualPriceLoadPromise = null;
 let actualPricesEditMode = false;
 let selectedAnnualBulkYear = null;
-let annualBulkEditing = false;
 let annualBulkDrafts = new Map();
+let annualBulkAppliedDrafts = new Set();
+let annualBulkItemRows = new Map();
+let selectedAnnualBulkItemKey = null;
+let annualBulkSearch = "";
+let annualBulkSaving = false;
 
 function setPolicyEditMode(policyId = null) {
   editingPolicyId = policyId ? String(policyId) : null;
@@ -37,10 +41,79 @@ function requireEntitlementOption(input, type, label) {
 
 function annualPolicyKey(itemName) { return String(itemName || '').trim().toLocaleLowerCase(); }
 
+function annualPolicyDraftKey(itemName, policy) {
+  return policy?.id !== null && policy?.id !== undefined
+    ? `policy:${policy.id}`
+    : `item:${annualPolicyKey(itemName)}`;
+}
+
+function annualPolicyDraftValue(row) {
+  return annualBulkDrafts.has(row.key) ? annualBulkDrafts.get(row.key) : String(Number(row.policy?.allowed_quantity || 0));
+}
+
+function annualPolicyDraftChanged(row) {
+  return annualBulkDrafts.has(row.key)
+    && annualBulkDrafts.get(row.key) !== String(Number(row.policy?.allowed_quantity || 0));
+}
+
+function annualBulkHasUnsavedChanges() {
+  return [...annualBulkItemRows.values()].some(annualPolicyDraftChanged);
+}
+
+function renderAnnualBulkItemList() {
+  const list = document.getElementById('annualBulkItemList');
+  if (!list) return;
+  const query = annualBulkSearch.trim().toLocaleLowerCase();
+  const rows = [...annualBulkItemRows.values()].filter((row) => row.item_name.toLocaleLowerCase().includes(query));
+  list.innerHTML = rows.map((row) => {
+    const changed = annualPolicyDraftChanged(row);
+    const draftState = changed ? (annualBulkAppliedDrafts.has(row.key) ? 'Applied to draft' : 'Needs Apply') : '';
+    return `<button type="button" class="annual-bulk-item-option${selectedAnnualBulkItemKey === row.key ? ' selected' : ''}" role="option" aria-selected="${selectedAnnualBulkItemKey === row.key}"${selectedAnnualBulkItemKey === row.key ? ' aria-current="true"' : ''} data-annual-bulk-select="${escapeHtml(row.key)}">
+      <span class="annual-bulk-item-name">${escapeHtml(row.item_name)}</span>
+      <span class="annual-bulk-item-values"><span>Current: ${Number(row.policy?.allowed_quantity || 0)}</span>${changed ? `<strong>${escapeHtml(annualPolicyDraftValue(row))} · ${draftState}</strong>` : ''}</span>
+    </button>`;
+  }).join('') || `<div class="annual-bulk-empty">${query ? 'No recognized items match this search.' : 'No recognized items are available for this financial year.'}</div>`;
+
+}
+
+function updateAnnualBulkDraftSummary() {
+  const summary = document.getElementById('annualBulkDraftSummary');
+  const save = document.getElementById('annualBulkSaveBtn');
+  if (!summary || !save) return;
+  const changed = [...annualBulkItemRows.values()].filter(annualPolicyDraftChanged);
+  const unapplied = changed.filter((row) => !annualBulkAppliedDrafts.has(row.key));
+  summary.textContent = changed.length
+    ? `${changed.length} item change(s) staged${unapplied.length ? ` · Apply ${unapplied.length} pending quantity edit(s) before saving` : ''}.`
+    : 'No changes staged.';
+  save.disabled = annualBulkSaving || changed.length === 0 || unapplied.length > 0;
+  document.getElementById('annualBulkCancelBtn')?.toggleAttribute('disabled', annualBulkSaving);
+  document.getElementById('annualBulkCloseBtn')?.toggleAttribute('disabled', annualBulkSaving);
+}
+
+function renderAnnualBulkSelection() {
+  const row = annualBulkItemRows.get(selectedAnnualBulkItemKey);
+  const empty = document.getElementById('annualBulkSelectionEmpty');
+  const form = document.getElementById('annualBulkItemForm');
+  if (!empty || !form) return;
+  empty.hidden = Boolean(row);
+  form.hidden = !row;
+  if (!row) return;
+  document.getElementById('annualBulkSelectedItem').textContent = row.item_name;
+  document.getElementById('annualBulkCurrentQuantity').textContent = Number(row.policy?.allowed_quantity || 0);
+  const input = document.getElementById('annualBulkQuantityInput');
+  input.value = annualPolicyDraftValue(row);
+  const itemStatus = document.getElementById('annualBulkItemDraftStatus');
+  const changed = annualPolicyDraftChanged(row);
+  if (itemStatus) itemStatus.textContent = !changed
+    ? 'No unsaved change for this item.'
+    : annualBulkAppliedDrafts.has(row.key) ? 'Quantity applied to this session draft; not saved yet.' : 'Unsaved edit retained. Apply this quantity before saving.';
+  renderAnnualBulkItemList();
+  updateAnnualBulkDraftSummary();
+}
+
 function renderAnnualBulkEditor() {
   const select = document.getElementById('annualBulkFinancialYear');
-  const body = document.getElementById('annualBulkPolicyRows');
-  if (!select || !body) return;
+  if (!select) return;
   const years = entitlementOptionValues('financialYears').map(Number).filter((year) => Number.isInteger(year));
   if (selectedAnnualBulkYear === null || !years.includes(Number(selectedAnnualBulkYear))) selectedAnnualBulkYear = years[0] ?? null;
   select.innerHTML = years.map((year) => `<option value="${year}">FY ${year}-${String((year + 1) % 100).padStart(2, '0')}</option>`).join('');
@@ -50,25 +123,58 @@ function renderAnnualBulkEditor() {
   const existing = new Map((state.annualPolicies || [])
     .filter((row) => Number(row.financial_year) === Number(selectedAnnualBulkYear))
     .map((row) => [annualPolicyKey(row.item_name), row]));
-  body.innerHTML = knownItems.map((itemName) => {
-    const row = existing.get(annualPolicyKey(itemName));
-    const currentQuantity = Number(row?.allowed_quantity || 0);
-    const draftQuantity = annualBulkDrafts.has(annualPolicyKey(itemName)) ? annualBulkDrafts.get(annualPolicyKey(itemName)) : String(currentQuantity);
-    const quantityCell = annualBulkEditing
-      ? `<input type="number" min="0" step="1" data-annual-bulk-item="${escapeHtml(itemName)}" value="${escapeHtml(draftQuantity)}" aria-label="Allowed quantity for ${escapeHtml(itemName)}">`
-      : `<span>${currentQuantity}</span>`;
-    return `<tr><td>${escapeHtml(itemName)}</td><td>FY ${escapeHtml(selectedAnnualBulkYear ?? '—')}</td><td>${quantityCell}</td><td>${escapeHtml(row?.status || 'Active')}</td></tr>`;
-  }).join('') || `<tr><td colspan="4" class="muted">No recognized items are available yet. Add items to the item master or import a distribution workbook.</td></tr>`;
-
-  document.getElementById('annualBulkEditBtn').hidden = annualBulkEditing;
-  document.getElementById('annualBulkSaveBtn').hidden = !annualBulkEditing;
-  document.getElementById('annualBulkCancelBtn').hidden = !annualBulkEditing;
+  annualBulkItemRows = new Map(knownItems.map((itemName) => {
+    const policy = existing.get(annualPolicyKey(itemName));
+    const key = annualPolicyDraftKey(itemName, policy);
+    return [key, { key, item_name: itemName, policy }];
+  }));
+  if (!annualBulkItemRows.has(selectedAnnualBulkItemKey)) selectedAnnualBulkItemKey = annualBulkItemRows.keys().next().value || null;
   document.getElementById('annualBulkDownloadBtn').disabled = years.length === 0 || knownItems.length === 0;
   document.getElementById('annualBulkUploadBtn').disabled = years.length === 0 || knownItems.length === 0;
   const status = document.getElementById('annualBulkStatus');
   if (status) status.textContent = selectedAnnualBulkYear === null
     ? 'No financial year is available.'
-    : `${knownItems.length} recognized item(s) for FY ${selectedAnnualBulkYear}. Edit quantities together and save once.`;
+    : `${knownItems.length} recognized item(s) for FY ${selectedAnnualBulkYear}. Open Bulk Edit to search, stage and save quantity changes.`;
+  if (document.getElementById('annualBulkModal')?.classList.contains('show')) renderAnnualBulkSelection();
+}
+
+function openAnnualBulkModal({ keepDrafts = false } = {}) {
+  if (!keepDrafts) {
+    annualBulkDrafts.clear();
+    annualBulkAppliedDrafts.clear();
+  }
+  renderAnnualBulkEditor();
+  const modal = document.getElementById('annualBulkModal');
+  if (!modal) return;
+  modal.classList.add('show');
+  modal.setAttribute('aria-hidden', 'false');
+  document.getElementById('annualBulkFinancialYear').disabled = true;
+  document.getElementById('annualBulkErrors').hidden = true;
+  renderAnnualBulkSelection();
+  document.getElementById('annualBulkSearch')?.focus();
+}
+
+function closeAnnualBulkModal({ force = false } = {}) {
+  if (!force && annualBulkHasUnsavedChanges() && !confirm('Discard all unsaved annual quantity edits?')) return false;
+  annualBulkDrafts.clear();
+  annualBulkAppliedDrafts.clear();
+  selectedAnnualBulkItemKey = null;
+  annualBulkSearch = '';
+  const modal = document.getElementById('annualBulkModal');
+  modal?.classList.remove('show');
+  modal?.setAttribute('aria-hidden', 'true');
+  document.getElementById('annualBulkFinancialYear').disabled = false;
+  const search = document.getElementById('annualBulkSearch');
+  if (search) search.value = '';
+  document.getElementById('annualBulkErrors').hidden = true;
+  updateAnnualBulkDraftSummary();
+  return true;
+}
+
+function validateAnnualBulkQuantity(rawValue, itemName) {
+  const value = rawValue === '' || rawValue === null || rawValue === undefined ? NaN : Number(rawValue);
+  if (!Number.isInteger(value) || value < 0) throw new Error(`${itemName}: enter a non-negative whole number.`);
+  return value;
 }
 
 async function loadActualPriceData(force = false) {
@@ -252,81 +358,133 @@ document.getElementById("policySearch")?.addEventListener("input", (event) => {
 });
 
 document.getElementById('annualBulkFinancialYear')?.addEventListener('change', (event) => {
-  if (annualBulkEditing && annualBulkDrafts.size && !confirm('Discard unsaved annual quantity edits?')) {
+  if (annualBulkHasUnsavedChanges() && !confirm('Discard unsaved annual quantity edits?')) {
     event.target.value = String(selectedAnnualBulkYear ?? '');
     return;
   }
   selectedAnnualBulkYear = Number(event.target.value) || null;
-  annualBulkEditing = false;
   annualBulkDrafts.clear();
+  annualBulkAppliedDrafts.clear();
+  selectedAnnualBulkItemKey = null;
   document.getElementById('annualBulkErrors').hidden = true;
   renderAnnualBulkEditor();
 });
 
 document.getElementById('annualBulkEditBtn')?.addEventListener('click', () => {
   if (selectedAnnualBulkYear === null) return;
-  annualBulkDrafts.clear();
-  annualBulkEditing = true;
-  document.getElementById('annualBulkErrors').hidden = true;
-  renderAnnualBulkEditor();
+  openAnnualBulkModal();
 });
 
-document.getElementById('annualBulkCancelBtn')?.addEventListener('click', () => {
-  annualBulkEditing = false;
-  annualBulkDrafts.clear();
-  document.getElementById('annualBulkErrors').hidden = true;
-  renderAnnualBulkEditor();
+document.getElementById('annualBulkSearch')?.addEventListener('input', (event) => {
+  annualBulkSearch = event.target.value;
+  renderAnnualBulkItemList();
 });
 
-document.getElementById('annualBulkPolicyRows')?.addEventListener('input', (event) => {
-  const input = event.target.closest('[data-annual-bulk-item]');
-  if (!input) return;
-  annualBulkDrafts.set(annualPolicyKey(input.dataset.annualBulkItem), input.value);
+document.getElementById('annualBulkItemList')?.addEventListener('click', (event) => {
+  const option = event.target.closest('[data-annual-bulk-select]');
+  if (!option) return;
+  selectedAnnualBulkItemKey = option.dataset.annualBulkSelect;
+  document.getElementById('annualBulkErrors').hidden = true;
+  renderAnnualBulkSelection();
+});
+
+document.getElementById('annualBulkQuantityInput')?.addEventListener('input', (event) => {
+  const row = annualBulkItemRows.get(selectedAnnualBulkItemKey);
+  if (!row) return;
+  annualBulkDrafts.set(row.key, event.target.value);
+  annualBulkAppliedDrafts.delete(row.key);
+  const changed = annualPolicyDraftChanged(row);
+  document.getElementById('annualBulkItemDraftStatus').textContent = changed
+    ? 'Unsaved edit retained. Apply this quantity before saving.'
+    : 'No unsaved change for this item.';
+  renderAnnualBulkItemList();
+  updateAnnualBulkDraftSummary();
+});
+
+document.getElementById('annualBulkItemForm')?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const row = annualBulkItemRows.get(selectedAnnualBulkItemKey);
+  const input = document.getElementById('annualBulkQuantityInput');
+  const errorBox = document.getElementById('annualBulkErrors');
+  if (!row) return;
+  try {
+    const value = validateAnnualBulkQuantity(input.value, row.item_name);
+    annualBulkDrafts.set(row.key, String(value));
+    annualBulkAppliedDrafts.add(row.key);
+    errorBox.hidden = true;
+    document.getElementById('annualBulkItemDraftStatus').textContent = 'Quantity applied to this session draft; not saved yet.';
+    renderAnnualBulkItemList();
+    updateAnnualBulkDraftSummary();
+  } catch (error) {
+    errorBox.textContent = error.message;
+    errorBox.hidden = false;
+    input.focus();
+  }
 });
 
 document.getElementById('annualBulkSaveBtn')?.addEventListener('click', async () => {
   const errorBox = document.getElementById('annualBulkErrors');
-  const items = entitlementOptionValues('items');
-  const rows = [...annualBulkDrafts.entries()].map(([key, allowed_quantity]) => ({
-    item_name: items.find((item) => annualPolicyKey(item) === key) || '', allowed_quantity,
-  })).filter((row) => row.item_name);
-  if (!rows.length) {
-    errorBox.textContent = 'No quantities were changed.';
+  const changedRows = [...annualBulkItemRows.values()].filter(annualPolicyDraftChanged);
+  const unapplied = changedRows.filter((row) => !annualBulkAppliedDrafts.has(row.key));
+  if (unapplied.length) {
+    errorBox.textContent = `Apply the quantity for: ${unapplied.map((row) => row.item_name).join(', ')}.`;
     errorBox.hidden = false;
     return;
   }
-  const invalid = rows.flatMap((row) => {
-    const value = row.allowed_quantity === '' ? NaN : Number(row.allowed_quantity);
-    return !Number.isInteger(value) || value < 0 ? [`${row.item_name}: enter a non-negative whole quantity.`] : [];
-  });
-  if (invalid.length) {
-    errorBox.textContent = invalid.join('\n');
+  if (!changedRows.length) {
+    errorBox.textContent = 'No quantities have changed.';
+    errorBox.hidden = false;
+    return;
+  }
+  let rows;
+  try {
+    rows = changedRows.map((row) => ({
+      item_name: row.item_name,
+      allowed_quantity: validateAnnualBulkQuantity(annualBulkDrafts.get(row.key), row.item_name),
+    }));
+  } catch (error) {
+    errorBox.textContent = error.message;
     errorBox.hidden = false;
     return;
   }
   errorBox.hidden = true;
-  const button = document.getElementById('annualBulkSaveBtn');
-  button.disabled = true;
+  annualBulkSaving = true;
+  updateAnnualBulkDraftSummary();
+  const savedYear = selectedAnnualBulkYear;
   try {
     startProgress();
-    const result = await window.uniformManager.bulkUpdateAnnualPolicies({ financial_year: selectedAnnualBulkYear, rows });
+    const result = await window.uniformManager.bulkUpdateAnnualPolicies({ financial_year: savedYear, rows });
     state = result.state;
     if (result.recalculationRequired) await refreshReviewQueueAfterPolicyChange();
     stopProgress();
-    annualBulkEditing = false;
     annualBulkDrafts.clear();
+    annualBulkAppliedDrafts.clear();
+    closeAnnualBulkModal({ force: true });
     render();
     setView('policies');
     const status = document.getElementById('annualBulkStatus');
-    if (status) status.textContent = `Saved ${result.saved} item quantity row(s) for FY ${selectedAnnualBulkYear}; ${result.changed} changed, ${result.inserted} created. ${result.recalculationRequired ? `Review Queue recalculated (${result.generated} new pending group(s)).` : 'No review recalculation was needed.'}`;
-    toast('Annual item quantities saved.');
+    if (status) status.textContent = `Saved ${result.saved} item quantity row(s) for FY ${savedYear}; ${result.changed} changed, ${result.inserted} created. ${result.recalculationRequired ? `Review Queue recalculated (${result.generated} new pending group(s)).` : 'No review recalculation was needed.'}`;
+    toast(`Saved ${result.changed} annual item quantity change(s).`);
   } catch (error) {
     stopProgress();
+    await refreshEntitlementsStateAfterFailure();
     errorBox.textContent = error.message || 'Annual item quantities could not be saved.';
     errorBox.hidden = false;
-    await refreshEntitlementsStateAfterFailure();
   } finally {
-    button.disabled = false;
+    annualBulkSaving = false;
+    updateAnnualBulkDraftSummary();
+  }
+});
+
+document.getElementById('annualBulkCancelBtn')?.addEventListener('click', () => closeAnnualBulkModal());
+document.getElementById('annualBulkCloseBtn')?.addEventListener('click', () => closeAnnualBulkModal());
+document.getElementById('annualBulkModal')?.addEventListener('click', (event) => {
+  if (event.target.id === 'annualBulkModal') closeAnnualBulkModal();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && document.getElementById('annualBulkModal')?.classList.contains('show')) {
+    event.preventDefault();
+    closeAnnualBulkModal();
   }
 });
 
@@ -355,15 +513,23 @@ document.getElementById('annualBulkCsvInput')?.addEventListener('change', async 
   try {
     const validation = window.AnnualPolicyCsv.validate(await file.text(), entitlementOptionValues('items'));
     if (validation.errors.length) throw new Error(validation.errors.join('\n'));
-    annualBulkDrafts = new Map(validation.rows.map((row) => [annualPolicyKey(row.item_name), row.allowed_quantity]));
-    annualBulkEditing = true;
-    errorBox.hidden = true;
     renderAnnualBulkEditor();
+    annualBulkDrafts.clear();
+    annualBulkAppliedDrafts.clear();
+    const rowsByItem = new Map([...annualBulkItemRows.values()].map((row) => [annualPolicyKey(row.item_name), row]));
+    validation.rows.forEach((entry) => {
+      const row = rowsByItem.get(annualPolicyKey(entry.item_name));
+      if (!row) throw new Error(`Item “${entry.item_name}” is no longer recognized. Refresh the item list and try again.`);
+      annualBulkDrafts.set(row.key, String(entry.allowed_quantity));
+      annualBulkAppliedDrafts.add(row.key);
+    });
+    errorBox.hidden = true;
+    openAnnualBulkModal({ keepDrafts: true });
     const status = document.getElementById('annualBulkStatus');
     if (status) status.textContent = `Loaded ${validation.rows.length} validated item quantity row(s) from ${file.name}; review and save to apply.`;
   } catch (error) {
-    errorBox.textContent = error.message || 'Could not load annual quantity CSV.';
-    errorBox.hidden = false;
+    const status = document.getElementById('annualBulkStatus');
+    if (status) status.textContent = error.message || 'Could not load annual quantity CSV.';
   }
 });
 

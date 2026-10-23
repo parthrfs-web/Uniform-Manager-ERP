@@ -1,5 +1,7 @@
 const getMissingAnnualPolicySuggestions = require('./missing-annual-policy-suggestions');
 const { getRecognizedAnnualItems, ensureAnnualPoliciesForRecognizedItems } = require('./annual-policy-sync');
+const { parseIssuePeriod } = require('../import/smart-importer');
+const { getEntitlementFinancialYear } = require('./entitlement-scope');
 
 module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, extractAmount, generateDeductionPdf }) => ({
     getState(options = {}) {
@@ -25,9 +27,8 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
       const currentDate = new Date();
       const currentFinancialYear = currentDate.getMonth() >= 3 ? currentDate.getFullYear() : currentDate.getFullYear() - 1;
       const annualFinancialYears = new Set([currentFinancialYear, ...annualPolicies.map((policy) => Number(policy.financial_year))]);
-      all(`SELECT DISTINCT CASE WHEN issue_month >= 4 THEN issue_year ELSE issue_year - 1 END AS financial_year
-        FROM uniform_issues WHERE issue_year IS NOT NULL`).forEach((row) => {
-        const year = Number(row.financial_year);
+      issueRows.forEach((row) => {
+        const year = getEntitlementFinancialYear(row);
         if (Number.isInteger(year) && year >= 1900 && year <= 9998) annualFinancialYears.add(year);
       });
       const policyByUnitItem = new Map(
@@ -36,7 +37,7 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
           policy,
         ])
       );
-      const annualPolicyByItemYear = new Map(annualPolicies.filter((policy) => String(policy.status || "Active").toLowerCase() === "active").map((policy) => [`${normalizeLabel(policy.item_name)}|${Number(policy.financial_year)}`, policy]));
+      const annualPolicyByItemYear = new Map(annualPolicies.filter((policy) => String(policy.status || "Active").trim().toLowerCase() === "active").map((policy) => [`${normalizeLabel(policy.item_name)}|${Number(policy.financial_year)}`, policy]));
       
       const itemOrder = new Map();
       issueRows.forEach((row) => {
@@ -93,9 +94,7 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
             employeeRow.entitlements[itemName] = { issued: 0, allowed: 0, balance: 0, status: "None" };
             return;
           }
-          const issueYear = Number(employeeRow.issue_year || 0);
-          const issueMonth = Number(employeeRow.issue_month || 0);
-          const financialYear = issueYear ? (issueMonth >= 4 ? issueYear : issueYear - 1) : 9999;
+          const financialYear = getEntitlementFinancialYear(employeeRow) ?? 9999;
           const annualPolicy = annualPolicyByItemYear.get(`${normalizeLabel(itemName)}|${financialYear}`);
           const unitPolicy = policyByUnitItem.get(`${normalizeLabel(employeeRow.unit)}|${normalizeLabel(itemName)}`);
           const needsAnnualPolicy = reviewMode === "item_annual" || reviewMode === "combined";
@@ -139,6 +138,35 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
       const reviewPendingCount = scalar("SELECT COUNT(*) FROM review_queue_items WHERE MAX(0, quantity - deducted_quantity - waived_quantity - held_quantity) > 0 AND COALESCE(is_active, 1) = 1");
       const reviewTotalCount = scalar("SELECT COUNT(*) FROM review_queue_items WHERE COALESCE(is_active, 1) = 1");
       const uniformIssueCount = scalar("SELECT COUNT(*) FROM uniform_issues WHERE quantity > 0");
+      const distributionActivityByItem = all(`
+        SELECT issue_year, issue_month, issue_period_label, item_name, SUM(quantity) AS issued_quantity
+        FROM uniform_issues
+        WHERE quantity > 0
+        GROUP BY issue_year, issue_month, issue_period_label, item_name
+      `);
+      const dashboardDistributionActivity = new Map();
+      distributionActivityByItem.forEach((row) => {
+        if (isIgnoredIssueItemName(row.item_name)) return;
+        let month = Number(row.issue_month);
+        let year = Number(row.issue_year);
+        if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 1900) {
+          const parsedPeriod = parseIssuePeriod(row.issue_period_label, { issue_year: Number.isInteger(year) && year >= 1900 ? year : null });
+          if (!Number.isInteger(month) || month < 1 || month > 12) month = Number(parsedPeriod.issue_month);
+          if (!Number.isInteger(year) || year < 1900) year = Number(parsedPeriod.issue_year);
+        }
+        if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 1900 || year > 9998) return;
+        const key = `${year}-${String(month).padStart(2, '0')}`;
+        dashboardDistributionActivity.set(key, (dashboardDistributionActivity.get(key) || 0) + Number(row.issued_quantity || 0));
+      });
+      const dashboardReviewQuantities = all(`
+        SELECT
+          COALESCE(SUM(MAX(0, quantity - deducted_quantity - waived_quantity - held_quantity)), 0) AS pending_quantity,
+          COALESCE(SUM(deducted_quantity), 0) AS deducted_quantity,
+          COALESCE(SUM(waived_quantity), 0) AS waived_quantity,
+          COALESCE(SUM(held_quantity), 0) AS held_quantity
+        FROM review_queue_items
+        WHERE COALESCE(is_active, 1) = 1
+      `)[0] || { pending_quantity: 0, deducted_quantity: 0, waived_quantity: 0, held_quantity: 0 };
       const distributionRows = [...matrixByEmployee.values()]
         .sort((a, b) =>
           Number(b.sort_year || 0) - Number(a.sort_year || 0) ||
@@ -301,6 +329,10 @@ reviewDecisionStats: all("SELECT status as decision, COUNT(*) as count, SUM(exce
           rows: distributionRows.slice(0, distributionLimit),
         },
         uniformIssueCount,
+        dashboardDistributionActivity: [...dashboardDistributionActivity.entries()]
+          .map(([period, issued_quantity]) => ({ period, issued_quantity }))
+          .sort((a, b) => a.period.localeCompare(b.period)),
+        dashboardReviewQuantities,
         uniformIssues: issueRows.slice(0, distributionLimit),
         entitlementClassificationHistory: all(`
           SELECT h.*, ui.employee_code, ui.employee_name, ui.unit, ui.item_name, ui.quantity, ui.issue_month, ui.issue_year, ui.issue_period_label

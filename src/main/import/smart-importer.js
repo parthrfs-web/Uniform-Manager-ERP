@@ -228,6 +228,13 @@ function detectRowPeriod(row) {
   return { issue_month: null, issue_year: null, issue_period_label: "" };
 }
 
+function detectSectionPeriod(row) {
+  const populated = (Array.isArray(row) ? row : []).map(normalizeString).filter(Boolean);
+  if (populated.length !== 1) return null;
+  const period = parseIssuePeriod(populated[0]);
+  return period.issue_period_label && (period.issue_month || period.issue_year) ? period : null;
+}
+
 function getRows(sheet) {
   if (!sheet) return [];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", blankrows: false });
@@ -376,6 +383,13 @@ function parseSheet(sheet, sheetName) {
     if (!Array.isArray(row) || isSkipRow(row)) {
         skipped++;
         continue;
+    }
+
+    const sectionPeriod = detectSectionPeriod(row);
+    if (sectionPeriod) {
+      currentSectionPeriod = sectionPeriod;
+      skipped++;
+      continue;
     }
 
     const rawCodeText = colMap.empCodeIdx !== -1 ? normalizeString(row[colMap.empCodeIdx]) : "";
@@ -807,10 +821,6 @@ function importWorkbook(filePath, db) {
   const importId = db.recordImport(summary);
   db.bulkCreateUniformIssues(validated.validIssues, importId);
 
-  if (typeof db.ensureDefaultPoliciesForImport === "function") {
-    db.ensureDefaultPoliciesForImport(importId);
-  }
-
   if (typeof db.evaluateEntitlementsForImport === "function") {
     const generatedReviews = db.evaluateEntitlementsForImport(importId);
     summary.generatedReviews = Number(generatedReviews || 0);
@@ -837,4 +847,4 @@ function importWorkbook(filePath, db) {
   return summary;
 }
 
-module.exports = { parseCandidate, inspectWorkbook, importWorkbook, buildValidatedImport, buildEmployeeIdentity };
+module.exports = { parseIssuePeriod, parseCandidate, inspectWorkbook, importWorkbook, buildValidatedImport, buildEmployeeIdentity };

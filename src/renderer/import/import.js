@@ -3,6 +3,8 @@ function setImporting(isImporting) {
   if(button) {
     button.disabled = isImporting;
     button.textContent = isImporting ? "Importing..." : "Choose Excel Workbook";
+    button.classList.toggle("is-loading", isImporting);
+    button.setAttribute("aria-busy", String(isImporting));
   }
 }
 
@@ -19,11 +21,41 @@ function hideImportModal() {
   document.getElementById("importModal").classList.remove("show");
 }
 
+function renderDetectedColumns(columns = {}) {
+  const fieldLabels = {
+    employee_code: "Employee Code",
+    employee_name: "Employee Name",
+    father_name: "Father's Name",
+    unit: "Unit / Company",
+    godown: "Godown",
+    mobile_number: "Mobile Number",
+    designation: "Designation",
+  };
+  const detected = Object.entries(fieldLabels)
+    .filter(([key]) => columns[key])
+    .map(([key, label]) => `<span class="sheet-field-chip"><b>${label}</b><span>${escapeHtml(columns[key])}</span></span>`);
+  return detected.length ? detected.join("") : `<span class="sheet-empty-note">No employee fields detected</span>`;
+}
+
+function renderSampleRows(rows = []) {
+  const fields = [
+    ["employee_code", "Employee Code"],
+    ["employee_name", "Employee Name"],
+    ["father_name", "Father's Name"],
+    ["unit", "Unit / Company"],
+    ["godown", "Godown"],
+  ];
+  const visibleFields = fields.filter(([key]) => rows.some((row) => row?.[key] !== undefined && row?.[key] !== null && row[key] !== ""));
+  if (!rows.length || !visibleFields.length) return `<p class="sheet-empty-note">No employee sample rows detected for this worksheet.</p>`;
+  return `<div class="sheet-sample-wrap"><table class="sheet-sample-table"><thead><tr>${visibleFields.map(([, label]) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${rows.slice(0, 5).map((row) => `<tr>${visibleFields.map(([key]) => `<td>${escapeHtml(row?.[key] ?? "—")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+
 function renderSheetCandidates() {
   const list = document.getElementById("sheetCandidates");
   const confirm = document.getElementById("confirmImportBtn");
   confirm.disabled = !selectedSheetName;
-  list.innerHTML = pendingInspection.candidates.map((candidate, index) => {
+  const candidates = Array.isArray(pendingInspection?.candidates) ? pendingInspection.candidates : [];
+  list.innerHTML = candidates.map((candidate, index) => {
     const checked = candidate.sheetName === selectedSheetName ? "checked" : "";
     const disabled = candidate.canImport ? "" : "disabled";
     const classes = [
@@ -31,35 +63,45 @@ function renderSheetCandidates() {
       candidate.sheetName === selectedSheetName ? "selected" : "",
       candidate.canImport ? "" : "disabled",
     ].filter(Boolean).join(" ");
-    const reasons = candidate.reasons.length ? candidate.reasons.join("; ") : "No recognizable import pattern found.";
-    const sample = candidate.sampleRows.length ? formatObject(candidate.sampleRows) : "No employee-like sample rows detected.";
-    const items = candidate.itemColumns?.length ? candidate.itemColumns.map((item) => item.itemName).join(", ") : "No uniform item columns detected.";
+    const reasons = Array.isArray(candidate.reasons) ? candidate.reasons : [];
+    const warnings = reasons.filter((reason) => /^(WARNING|ERROR):/i.test(reason));
+    const status = candidate.canImport ? "Ready to import" : "Not recognized as a distribution sheet";
+    const itemColumns = Array.isArray(candidate.itemColumns) ? candidate.itemColumns : [];
+    const items = itemColumns.length
+      ? itemColumns.map((item) => `<span class="sheet-item-chip">${escapeHtml(item.itemName)}</span>`).join("")
+      : `<span class="sheet-empty-note">No uniform item columns detected</span>`;
     return `
-      <article class="${classes}">
+      <article class="${classes} sheet-candidate">
         <div class="candidate-top">
           <label class="candidate-title">
             <input type="radio" name="sheetCandidate" value="${escapeHtml(candidate.sheetName)}" ${checked} ${disabled} />
             <span>${index + 1}. ${escapeHtml(candidate.sheetName)}</span>
           </label>
-          <div class="candidate-meta">
-            Score ${candidate.score} | Rows ${candidate.likelyRows} | Header row ${candidate.headerRow || "-"}
-          </div>
+          <div class="sheet-status ${candidate.canImport ? "ready" : "unavailable"}">${status}</div>
         </div>
-        <div class="candidate-grid">
-          <div>
-            <strong>Detected Columns</strong>
-          <pre>${formatObject(candidate.columns)}</pre>
-          </div>
-          <div>
-            <strong>Sample Rows</strong>
-            <pre>${sample}</pre>
-          </div>
+        <div class="sheet-facts">
+          <div><span>Match score</span><strong>${escapeHtml(candidate.score ?? 0)}</strong></div>
+          <div><span>Employee rows</span><strong>${escapeHtml(candidate.likelyRows ?? 0)}</strong></div>
+          <div><span>Item columns</span><strong>${itemColumns.length}</strong></div>
+          <div><span>Header row</span><strong>${escapeHtml(candidate.headerRow ?? "Not found")}</strong></div>
         </div>
-        <p class="candidate-meta"><strong>Uniform item columns:</strong> ${escapeHtml(items)}</p>
-        <p class="candidate-meta">${escapeHtml(reasons)}</p>
+        <section class="sheet-detail-block">
+          <h4>Detected employee fields</h4>
+          <div class="sheet-field-list">${renderDetectedColumns(candidate.columns)}</div>
+        </section>
+        <section class="sheet-detail-block">
+          <h4>Detected uniform items <span>${itemColumns.length}</span></h4>
+          <div class="sheet-item-list">${items}</div>
+        </section>
+        <section class="sheet-detail-block">
+          <h4>Sample employee rows</h4>
+          ${renderSampleRows(Array.isArray(candidate.sampleRows) ? candidate.sampleRows : [])}
+        </section>
+        ${warnings.length ? `<section class="sheet-warnings"><strong>Review these notes</strong><ul>${warnings.map((warning) => `<li>${escapeHtml(warning.replace(/^(WARNING|ERROR):\s*/i, ""))}</li>`).join("")}</ul></section>` : ""}
+        ${!candidate.canImport && reasons.length ? `<p class="sheet-unavailable-reason">${escapeHtml(reasons.find((reason) => !/^(WARNING|ERROR):/i.test(reason)) || "This worksheet does not contain recognizable employee distribution data.")}</p>` : ""}
       </article>
     `;
-  }).join("");
+  }).join("") || `<div class="sheet-empty-note sheet-no-candidates">No worksheets were found in this workbook.</div>`;
 }
 
 function renderHistory() {
@@ -98,10 +140,12 @@ document.getElementById("goImportBtn")?.addEventListener("click", async (e) => {
     setImporting(true);
     toast("Analyzing workbook sheets before import.");
     const result = await window.uniformManager.chooseAndImportWorkbook();
+    stopProgress();
     if (result.canceled) return;
     showImportModal(result.inspection);
     toast("Workbook analyzed. Please confirm the correct sheet.");
   } catch (error) {
+    stopProgress();
     const message = error.message || "Import failed.";
     showImportError(message);
     toast("Import failed. Details are shown on the dashboard.");
@@ -125,10 +169,12 @@ document.getElementById("confirmImportBtn")?.addEventListener("click", async () 
     document.getElementById("confirmImportBtn").disabled = true;
     toast(`Validating sheet ${selectedSheetName}...`);
     
+    startProgress({ title: "Validating Records", description: "Checking the selected worksheet against application import rules.", kicker: "WORKBOOK VALIDATION" });
     const result = await window.uniformManager.previewImportSelectedSheet({
       filePath: pendingInspection.filePath,
       sheetName: selectedSheetName,
     });
+    stopProgress();
     
     currentPreviewData = result.preview;
     hideImportModal();
@@ -145,6 +191,7 @@ document.getElementById("confirmImportBtn")?.addEventListener("click", async () 
     
     document.getElementById("importPreviewModal").classList.add("show");
   } catch (error) {
+    stopProgress();
     showImportError(error.message || "Preview failed.");
     toast("Preview failed.");
   } finally {
@@ -166,7 +213,7 @@ document.getElementById("commitImportBtn")?.addEventListener("click", async () =
     
     document.getElementById("importPreviewModal").classList.remove("show");
     
-    startProgress();
+    startProgress({ title: "Importing Uniform Records", description: "Saving validated employees and distributions, then calculating review quantities.", kicker: "DATABASE IMPORT" });
     
     const result = await window.uniformManager.commitImport(currentPreviewData);
     
@@ -188,17 +235,12 @@ document.getElementById("commitImportBtn")?.addEventListener("click", async () =
 
 if (window.uniformManager && window.uniformManager.onImportProgress) {
   window.uniformManager.onImportProgress((data) => {
-    const modal = document.getElementById("progressModal");
-    if (modal && !modal.classList.contains("show")) {
-      startProgress();
-    }
-    const statusEl = document.getElementById("progressStatus");
-    if (statusEl && data.status) statusEl.textContent = data.status;
-    
-    const barEl = document.getElementById("progressBar");
-    if (barEl && data.progress !== undefined) barEl.style.width = `${data.progress}%`;
-    
-    const pctEl = document.getElementById("progressPercent");
-    if (pctEl && data.progress !== undefined) pctEl.textContent = `${Math.floor(data.progress)}%`;
+    if (data.operationTitle || !progressActive) startProgress({
+      title: data.operationTitle || "Processing Request",
+      description: data.operationDescription || "Working with your local application data.",
+      kicker: data.operationKicker || "SYSTEM TASK",
+      immediate: true,
+    });
+    updateProgress(data);
   });
 }

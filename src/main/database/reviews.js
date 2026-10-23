@@ -1,26 +1,27 @@
+const { calendarCycle, nextCalendarCycle } = require('./hold-review-dates');
+const { normalizeEntitlementLabel, getEntitlementFinancialYear } = require('./entitlement-scope');
+
 module.exports = (context) => {
     const { db, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, extractAmount, generateDeductionPdf } = context;
 
     function cycleFor(dateValue = now()) {
-        const date = new Date(dateValue);
-        const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
-        return { year: safeDate.getFullYear(), month: safeDate.getMonth() + 1 };
+        return calendarCycle(dateValue);
     }
 
     function nextCycle(dateValue = now()) {
-        const { year, month } = cycleFor(dateValue);
-        const date = new Date(year, month, 1);
-        return { year: date.getFullYear(), month: date.getMonth() + 1 };
+        return nextCalendarCycle(dateValue);
     }
 
-    function insertHoldLot(child, quantity, { eventType = 'Held', reason = '', actor = 'Admin', heldAt = now() } = {}) {
+    function insertHoldLot(child, quantity, { eventType = null, reason = '', actor = 'Admin', heldAt = now() } = {}) {
         const amount = Number(quantity);
         if (!Number.isInteger(amount) || amount <= 0) return null;
+        const resolvedEventType = eventType || (scalar(`SELECT COUNT(*) FROM review_hold_events
+            WHERE review_queue_item_id = ? AND event_type IN ('Held', 'Held Again')`, [Number(child.id)]) > 0 ? 'Held Again' : 'Held');
         const due = nextCycle(heldAt);
         db.run(`INSERT INTO review_hold_events
             (review_queue_item_id, review_id, uniform_issue_id, employee_code, item_name, event_type, quantity, reason, actor, due_month, due_year, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [child.id, child.review_queue_id, child.uniform_issue_id, child.employee_code, child.item_name, eventType, amount, reason, actor, due.month, due.year, heldAt]);
+            [child.id, child.review_queue_id, child.uniform_issue_id, child.employee_code, child.item_name, resolvedEventType, amount, reason, actor, due.month, due.year, heldAt]);
         return Number(scalar('SELECT last_insert_rowid()'));
     }
 
@@ -64,8 +65,8 @@ module.exports = (context) => {
         return { ...totals, status };
     }
 
-    function reopenDueHeldReviews() {
-        const dueCycle = cycleFor();
+    function reopenDueHeldReviews(asOfDate = now()) {
+        const dueCycle = cycleFor(asOfDate);
         const dueLots = all(`SELECT h.review_queue_item_id AS item_id,
             SUM(h.quantity - COALESCE((SELECT SUM(action.quantity) FROM review_hold_events action WHERE action.related_event_id = h.id AND action.event_type IN ('Reopened', 'Resolved', 'Reheld')), 0)) AS due_quantity
             FROM review_hold_events h
@@ -160,23 +161,19 @@ module.exports = (context) => {
         `, [employeeCode]);
 
         rows.forEach(row => {
-            const issueYear = Number(row.issue_year || 0);
-            const issueMonth = Number(row.issue_month || 0);
-            row.financial_year = issueYear ? (issueMonth >= 4 ? issueYear : issueYear - 1) : null;
+            row.financial_year = getEntitlementFinancialYear(row);
             row.calculation_scope_key = reviewMode === "unit_wise"
-                ? `${String(row.item_name || '').toLowerCase()}|${row.financial_year}|${String(row.unit || '').toLowerCase()}`
-                : `${String(row.item_name || '').toLowerCase()}|${row.financial_year}`;
-            const history = all(`
+                ? `${normalizeEntitlementLabel(row.item_name)}|${row.financial_year ?? 'unknown'}|${normalizeEntitlementLabel(row.unit)}`
+                : `${normalizeEntitlementLabel(row.item_name)}|${row.financial_year ?? 'unknown'}`;
+            const historyCandidates = all(`
                 SELECT id, issued_at as issue_date, quantity, unit, issue_month, issue_year, issue_period_label, remarks, entitlement_consumed, excess_generated
                 FROM uniform_issues
-                WHERE employee_code = ? AND lower(item_name) = lower(?)
-                  AND CASE WHEN COALESCE(issue_month, 0) >= 4 THEN CAST(issue_year AS INTEGER)
-                           ELSE CAST(issue_year AS INTEGER) - 1 END = ?
-                  ${reviewMode === "unit_wise" ? "AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))" : ""}
+                WHERE trim(employee_code) = trim(?) AND lower(trim(item_name)) = lower(trim(?))
                 ORDER BY COALESCE(issue_year, 9999) ASC, COALESCE(issue_month, 99) ASC, issued_at ASC, id ASC
-            `, reviewMode === "unit_wise"
-                ? [row.employee_code, row.item_name, row.financial_year || 9999, row.unit]
-                : [row.employee_code, row.item_name, row.financial_year || 9999]);
+            `, [row.employee_code, row.item_name]);
+            const history = historyCandidates.filter((entry) =>
+                getEntitlementFinancialYear(entry) === row.financial_year
+                && (reviewMode !== 'unit_wise' || normalizeEntitlementLabel(entry.unit) === normalizeEntitlementLabel(row.unit)));
 
             row.history_items = history.length > 0 ? history.map((entry) => {
                 const consumed = Number(entry.entitlement_consumed || 0);

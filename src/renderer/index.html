@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Uniform Manager</title>
     <link rel="stylesheet" href="./styles/styles.css" />
+    <link rel="stylesheet" href="./styles/premium-theme.css" />
     <style>
       .clickable { cursor: pointer; transition: background 0.2s; }
       .clickable:hover { background: #1f2b3d; }
@@ -22,10 +23,12 @@
         <div class="brand">
           <!-- Keep typography but update the second line -->
           <span class="brand-title">Uniform Manager</span>
+          <span class="brand-subtitle">Uniform operations</span>
         </div>
       </div>
 
       <nav class="sidebar-section-middle">
+        <div class="nav-header">Workspace</div>
         <button class="nav-button" data-view="dashboard">Dashboard</button>
         <button class="nav-button" data-view="import">Import Excel</button>
         <button class="nav-button" data-view="employees">Employees</button>
@@ -63,6 +66,15 @@
           <h2 id="viewTitle">Dashboard</h2>
           <p id="viewSubtitle">Import employee master data and keep it locally on this PC.</p>
         </div>
+        <div class="global-nav-search" id="globalNavSearch">
+          <label class="sr-only" for="globalNavSearchInput">Search application pages</label>
+          <div class="global-nav-search-box">
+            <svg class="global-nav-search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 5 5"></path></svg>
+            <input id="globalNavSearchInput" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="globalNavSearchResults" aria-haspopup="listbox" autocomplete="off" spellcheck="false" placeholder="Search pages and features..." />
+            <kbd class="global-nav-shortcut" aria-hidden="true">Ctrl K</kbd>
+          </div>
+          <div class="global-nav-results" id="globalNavSearchResults" role="listbox" aria-label="Application pages" hidden></div>
+        </div>
       </header>
 
       
@@ -71,42 +83,80 @@
       <section class="view active" id="dashboard">
         <div id="importError" class="error-panel"></div>
 
-        <div class="panel flush" style="margin-bottom: 18px; padding: 12px 18px; display: flex; gap: 10px; background: #131922;">
-          <strong style="margin-right: auto; align-self: center; color: var(--muted);">Quick Actions:</strong>
-          <button class="secondary" onclick="setView('import')">Import Excel</button>
-          <button class="secondary" onclick="setView('review')">Open Review Queue</button>
-          <button class="secondary" onclick="setView('deductions')">Open Reports</button>
-          <button class="secondary" onclick="setView('analytics_monthly')">View Analytics</button>
+        <svg class="dashboard-icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <symbol id="dash-icon-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20c.7-3.7 3.2-5.5 7.5-5.5s6.8 1.8 7.5 5.5"/></symbol>
+          <symbol id="dash-icon-people" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c.5-3.4 2.5-5 6-5s5.5 1.6 6 5M16 5.5a3 3 0 0 1 0 5.8M17 15c2.2.5 3.5 2.1 4 5"/></symbol>
+          <symbol id="dash-icon-box" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="M3 8v9l9 5 9-5V8M12 13v9"/></symbol>
+          <symbol id="dash-icon-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2L12 3Z"/><path d="M12 9v5m0 3h.01"/></symbol>
+          <symbol id="dash-icon-clipboard" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2h6v2M8 10h8M8 14h8M8 18h5"/></symbol>
+          <symbol id="dash-icon-hold" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 8v8m4-8v8"/></symbol>
+          <symbol id="dash-icon-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16.5 9"/></symbol>
+          <symbol id="dash-icon-rupee" viewBox="0 0 24 24"><path d="M5 4h14M5 8h14M7 4c5 0 7 1.5 7 4s-2 4-7 4h-2l9 8"/></symbol>
+          <symbol id="dash-icon-import" viewBox="0 0 24 24"><path d="M12 15V3m-4 4 4-4 4 4M4 14v6h16v-6"/></symbol>
+          <symbol id="dash-icon-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 10h18M8 14h2m4 0h2m-8 3h2"/></symbol>
+          <symbol id="dash-icon-units" viewBox="0 0 24 24"><path d="M3 21V6l9-3 9 3v15M3 10h18M8 10v11m8-11v11M6 21h12"/></symbol>
+          <symbol id="dash-icon-item" viewBox="0 0 24 24"><path d="M4 8 12 3l8 5-8 5-8-5Z"/><path d="M4 8v9l8 4 8-4V8M12 13v8"/></symbol>
+          <symbol id="dash-icon-policy" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M14 3v5h5M8 12h8m-8 4h8"/></symbol>
+          <symbol id="dash-icon-trend" viewBox="0 0 24 24"><path d="M3 18 9 12l4 3 8-9M15 6h6v6"/></symbol>
+          <symbol id="dash-icon-chart" viewBox="0 0 24 24"><path d="M4 20V4m0 16h17M8 16v-4m5 4V7m5 9v-7"/></symbol>
+        </svg>
+
+        <section class="dashboard-hero" aria-label="Uniform operations dashboard">
+          <div class="dashboard-intro">
+            <span class="eyebrow">UNIFORM OPERATIONS</span>
+            <h3>Operational overview</h3>
+            <p>Monitor workforce distribution, entitlement reviews, and payroll recovery from one place.</p>
+          </div>
+          <div class="dashboard-actions" aria-label="Quick actions">
+            <span class="dashboard-action-label">Start or review work</span>
+            <button class="secondary" onclick="setView('import')"><span aria-hidden="true">⇧</span> Import Excel</button>
+            <button class="secondary" onclick="setView('review')"><span aria-hidden="true">✓</span> Review Queue</button>
+          </div>
+        </section>
+
+        <div class="stats dashboard-stats" id="dashboardStats">
+          <article><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-user"/></svg></span><span>Active Employees</span></div><strong id="dashActiveEmployees">0</strong></article>
+          <article><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-people"/></svg></span><span>Total Employees</span></div><strong id="dashTotalEmployees">0</strong></article>
+          <article><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-box"/></svg></span><span>Distribution Records</span></div><strong id="dashDistRows">0</strong></article>
+          <article class="metric-warning"><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-alert"/></svg></span><span>Employees with Excess</span></div><strong id="dashExcessEmployees">0</strong></article>
+          <article class="metric-critical"><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-clipboard"/></svg></span><span>Pending Reviews</span></div><strong id="dashPendingReviews">0</strong></article>
+          <article><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-chart"/></svg></span><span>Total Reviews</span></div><strong id="dashTotalReviews">0</strong></article>
+          <article class="metric-warning"><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-hold"/></svg></span><span>Held Cases</span></div><strong id="dashHeldCases">0</strong></article>
+          <article class="metric-success"><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-check"/></svg></span><span>Waived Cases</span></div><strong id="dashWaivedCases">0</strong></article>
+          <article class="metric-critical"><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-rupee"/></svg></span><span>Deducted Cases</span></div><strong id="dashDeductedCases">0</strong></article>
+          <article class="metric-success"><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-rupee"/></svg></span><span>Recovered Amount</span></div><strong id="dashRecovered">Rs. 0.00</strong></article>
+          <article><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-import"/></svg></span><span>Today's Imports</span></div><strong id="dashTodayImports">0</strong></article>
+          <article><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-calendar"/></svg></span><span>This Month's Imports</span></div><strong id="dashMonthImports">0</strong></article>
+          <article><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-units"/></svg></span><span>Units / Clients</span></div><strong id="dashUnits">0</strong></article>
+          <article><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-item"/></svg></span><span>Inventory Items</span></div><strong id="dashInventoryItems">0</strong></article>
+          <article><div class="dashboard-stat-heading"><span class="dashboard-stat-icon"><svg><use href="#dash-icon-policy"/></svg></span><span>Policies Configured</span></div><strong id="dashPolicies">0</strong></article>
         </div>
 
-        <div class="stats" id="dashboardStats" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px;">
-          <article><span>Active Employees</span><strong id="dashActiveEmployees">0</strong></article>
-          <article><span>Total Employees</span><strong id="dashTotalEmployees">0</strong></article>
-          <article><span>Distribution Records</span><strong id="dashDistRows">0</strong></article>
-          <article><span>Employees w/ Excess</span><strong id="dashExcessEmployees">0</strong></article>
+        <section class="dashboard-analytics" aria-label="Dashboard analytics">
+          <article class="panel dashboard-trend-panel">
+            <div class="section-heading"><div><span class="eyebrow">DISTRIBUTIONS</span><h3>Distribution Activity</h3><p>Issued quantity by recorded distribution month</p></div><span class="chart-period-label">12 latest active months</span></div>
+            <div id="dashboardDistributionChart" class="dashboard-chart" role="img" aria-label="Distribution activity chart"></div>
+          </article>
+          <article class="panel dashboard-review-panel">
+            <div class="section-heading"><div><span class="eyebrow">REVIEW OUTCOMES</span><h3>Review Quantity Breakdown</h3><p>Persisted quantities by decision</p></div></div>
+            <div id="dashboardReviewChart" class="dashboard-review-chart" role="img" aria-label="Review quantity breakdown"></div>
+          </article>
+        </section>
 
-          <article><span>Pending Reviews</span><strong class="text-amber" id="dashPendingReviews">0</strong></article>
-          <article><span>Total Reviews</span><strong id="dashTotalReviews">0</strong></article>
-          <article><span>Held Cases</span><strong class="text-blue" id="dashHeldCases">0</strong></article>
-          <article><span>Waived Cases</span><strong class="text-green" id="dashWaivedCases">0</strong></article>
+        <div class="dashboard-lower-grid">
+          <aside class="dashboard-support-rail" aria-label="Recent data activity and quick actions">
+            <div class="panel dashboard-latest-import">
+              <div class="section-heading"><div><span class="eyebrow">DATA ACTIVITY</span><h3>Latest Import History</h3></div></div>
+              <div id="lastImport" class="empty">No workbook imported yet.</div>
+            </div>
+            <div class="panel dashboard-quick-actions">
+              <div class="section-heading"><div><span class="eyebrow">SHORTCUTS</span><h3>Quick Actions</h3></div></div>
+              <button class="dashboard-quick-action" type="button" onclick="setView('deductions')"><span class="quick-action-icon"><svg><use href="#dash-icon-rupee"/></svg></span><span><strong>Payroll Register</strong><small>View payroll deductions</small></span><b aria-hidden="true">›</b></button>
+              <button class="dashboard-quick-action" type="button" onclick="setView('analytics_monthly')"><span class="quick-action-icon"><svg><use href="#dash-icon-trend"/></svg></span><span><strong>Reports &amp; Analytics</strong><small>Explore operational reports</small></span><b aria-hidden="true">›</b></button>
+            </div>
+          </aside>
 
-          <article><span>Deducted Cases</span><strong class="text-red" id="dashDeductedCases">0</strong></article>
-          <article><span>Recovered Amount</span><strong class="text-green" id="dashRecovered">Rs. 0.00</strong></article>
-
-          <article><span>Today's Imports</span><strong id="dashTodayImports">0</strong></article>
-          <article><span>This Month's Imports</span><strong id="dashMonthImports">0</strong></article>
-
-          <article><span>Units / Clients</span><strong id="dashUnits">0</strong></article>
-          <article><span>Inventory Items</span><strong id="dashInventoryItems">0</strong></article>
-          <article><span>Policies Configured</span><strong id="dashPolicies">0</strong></article>
-        </div>
-
-        <div class="panel">
-          <h3>Latest Import History</h3>
-          <div id="lastImport" class="empty">No workbook imported yet.</div>
-        </div>
-
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-bottom: 24px;">
+        <div class="dashboard-overview-grid">
           <div class="panel flush">
             <div class="panel-heading"><h3>Top 10 Units by Excess</h3></div>
             <div class="table-wrap">
@@ -146,6 +196,7 @@
               </table>
             </div>
           </div>
+        </div>
         </div>
       </section>
 
@@ -252,7 +303,7 @@
             </article>
             <article style="padding: 16px; border: 1px solid #69363c; border-radius: 8px; background: #2a1b20;">
               <h4 style="margin: 0 0 8px; color: var(--red);">Reset Items &amp; Policies</h4>
-              <p style="color: var(--muted); margin: 0 0 16px; font-size: 13px;">Permanently delete inventory items and unit policies for a new company setup.</p>
+              <p style="color: var(--muted); margin: 0 0 16px; font-size: 13px;">Clear inventory items, unit policies, and Annual Item Entitlements for a new company setup. Actual Item Prices and imported operational history are preserved.</p>
               <button id="resetItemsAndPoliciesBtn" class="danger" type="button" style="width: 100%;">Reset Items &amp; Policies</button>
             </article>
           </div>
@@ -260,7 +311,7 @@
 
         <div class="panel danger-zone">
           <h3>Reset Imported Data</h3>
-          <p>This clears imported employees, distribution register rows, import history and review queue records. Unit policies and item settings are kept.</p>
+          <p>This clears imported employees, distribution register rows, import history and review queue records. Unit policies, Annual Item Entitlements and Actual Item Prices are kept.</p>
           <label class="check-row">
             <input id="resetAcknowledge" type="checkbox" />
             <span>I understand this will delete imported operational data from this PC.</span>
@@ -402,20 +453,12 @@
                 <label for="annualBulkFinancialYear">Financial Year</label>
                 <select id="annualBulkFinancialYear" aria-label="Annual policy financial year"></select>
                 <button id="annualBulkEditBtn" class="secondary" type="button">Bulk Edit / Bulk Quantity Update</button>
-                <button id="annualBulkSaveBtn" class="primary" type="button" hidden>Save Quantities</button>
-                <button id="annualBulkCancelBtn" class="secondary" type="button" hidden>Cancel</button>
                 <button id="annualBulkDownloadBtn" class="secondary" type="button">Download CSV Template</button>
                 <button id="annualBulkUploadBtn" class="secondary" type="button">Upload CSV Quantities</button>
                 <input id="annualBulkCsvInput" type="file" accept=".csv,text/csv" hidden />
               </div>
               <p id="annualBulkStatus" class="muted" role="status">Select a financial year to view all recognized item limits.</p>
-              <div id="annualBulkErrors" class="form-error" role="alert" hidden></div>
-              <div class="table-wrap">
-                <table>
-                  <thead><tr><th>Item</th><th>Financial Year</th><th>Allowed Quantity</th><th>Status</th></tr></thead>
-                  <tbody id="annualBulkPolicyRows"></tbody>
-                </table>
-              </div>
+              <p class="muted annual-bulk-hint">Search the recognized item catalog, stage quantities for this financial year, then save all changes together.</p>
             </div>
             <details class="advanced-filters annual-manual-policy">
               <summary>Individual Policy Entry and Policy Record Maintenance</summary>
@@ -429,6 +472,42 @@
               </form>
               <div class="table-wrap"><table><thead><tr><th>Item</th><th>Financial Year</th><th>Allowed Quantity</th><th>Status</th><th>Actions</th></tr></thead><tbody id="annualPolicyRows"></tbody></table></div>
             </details>
+          </div>
+          <div class="modal-backdrop annual-bulk-backdrop" id="annualBulkModal" aria-hidden="true">
+            <section class="modal annual-bulk-modal" role="dialog" aria-modal="true" aria-labelledby="annualBulkModalTitle" aria-describedby="annualBulkModalDescription">
+              <header class="modal-header">
+                <div>
+                  <h3 id="annualBulkModalTitle">Annual Item Quantity Update</h3>
+                  <p id="annualBulkModalDescription">Search recognized items, apply each quantity to the draft, then save the batch.</p>
+                </div>
+                <button type="button" class="secondary" id="annualBulkCloseBtn" aria-label="Close annual quantity editor">✕</button>
+              </header>
+              <div class="annual-bulk-dialog-body">
+                <div class="annual-bulk-browser">
+                  <label class="annual-bulk-search-label" for="annualBulkSearch">Search Item</label>
+                  <input id="annualBulkSearch" type="search" placeholder="Search by item name…" autocomplete="off" />
+                  <div id="annualBulkItemList" class="annual-bulk-item-list" role="listbox" aria-label="Recognized items"></div>
+                </div>
+                <section class="annual-bulk-quantity-editor" aria-label="Selected item quantity editor">
+                  <div id="annualBulkSelectionEmpty" class="annual-bulk-selection-empty">Select an item to edit its annual allowed quantity.</div>
+                  <form id="annualBulkItemForm" hidden>
+                    <p class="annual-bulk-selected-label">Selected Item</p>
+                    <h4 id="annualBulkSelectedItem"></h4>
+                    <p class="annual-bulk-current-value">Current allowed quantity: <strong id="annualBulkCurrentQuantity">0</strong></p>
+                    <label for="annualBulkQuantityInput">Allowed annual quantity</label>
+                    <input id="annualBulkQuantityInput" type="number" min="0" step="1" inputmode="numeric" required />
+                    <p id="annualBulkItemDraftStatus" class="muted" role="status">No unsaved change for this item.</p>
+                    <button type="submit" class="primary">Apply Quantity</button>
+                  </form>
+                </section>
+              </div>
+              <div id="annualBulkErrors" class="form-error annual-bulk-errors" role="alert" hidden></div>
+              <footer class="modal-footer annual-bulk-modal-footer">
+                <span id="annualBulkDraftSummary" class="muted" role="status">No changes staged.</span>
+                <button type="button" class="secondary" id="annualBulkCancelBtn">Cancel</button>
+                <button type="button" class="primary" id="annualBulkSaveBtn" disabled>Save All Changes</button>
+              </footer>
+            </section>
           </div>
         <div class="panel flush entitlement-section missing-annual-panel">
           <div class="panel-heading">
@@ -847,25 +926,23 @@
       </div>
     </div>
 
-    <div class="modal-backdrop" id="progressModal">
-      <div class="modal" style="width: 480px;">
-        <div class="modal-header" style="border: 0; padding-bottom: 0;">
-          <div>
-            <h3>Processing Data</h3>
-            <p id="progressStatus" style="color: var(--blue);">Please wait...</p>
-          </div>
+    <div class="modal-backdrop processing-backdrop" id="progressModal" role="dialog" aria-modal="true" aria-labelledby="progressTitle" aria-describedby="progressDescription" aria-hidden="true">
+      <div class="modal processing-modal">
+        <div class="processing-topline"><span class="processing-live-dot"></span><span>UNIFORM MANAGER · LOCAL PROCESSING</span><span id="progressElapsedTop">00:00</span></div>
+        <div class="processing-core-wrap" aria-hidden="true">
+          <div class="processing-orbit orbit-one"><i></i><i></i></div><div class="processing-orbit orbit-two"><i></i></div><div class="processing-orbit orbit-three"><i></i><i></i><i></i></div><div class="processing-scan"></div>
+          <div class="processing-core"><svg viewBox="0 0 64 64" role="presentation"><path d="M32 5 54 18v28L32 59 10 46V18L32 5Z"/><path d="m32 15 13 8v18l-13 8-13-8V23l13-8Z"/><path d="m32 5 0 10m22 3-9 5m9 23-9-5m-13 18V49m-22-3 9-5m-9-23 9 5"/></svg></div>
         </div>
-        <div style="padding: 24px 18px;">
-           <div style="width: 100%; height: 8px; background: #1b2634; border-radius: 4px; overflow: hidden; margin-bottom: 12px;">
-              <div id="progressBar" style="height: 100%; width: 0%; background: var(--blue); transition: width 0.2s ease;"></div>
-           </div>
-           <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); font-weight: 600;">
-              <span id="progressPercent">0%</span>
-              <span id="progressTime">00:00</span>
-           </div>
-        </div>
+        <div class="processing-copy"><p class="processing-kicker" id="progressKicker">SYSTEM TASK</p><h3 id="progressTitle">Processing Request</h3><p id="progressDescription">Working with your local application data.</p></div>
+        <div id="progressStage" class="processing-stage" hidden></div>
+        <div class="processing-status-row" aria-live="polite"><span class="processing-status-indicator"></span><span id="progressStatus">Preparing operation...</span></div>
+        <div id="progressRecords" class="processing-records" hidden><span>RECORDS</span><strong id="progressRecordsValue"></strong></div>
+        <div class="processing-meter" id="processingMeter" role="progressbar" aria-label="Operation progress" aria-valuemin="0" aria-valuemax="100" aria-valuetext="Progress not yet available"><div class="processing-meter-fill" id="progressBar"></div></div>
+        <div class="processing-metrics"><strong id="progressPercent">Working</strong><span>ELAPSED <b id="progressTime">00:00</b></span></div>
+        <button id="skipProgressAnimation" class="secondary processing-skip" type="button">Skip Animation</button>
       </div>
     </div>
+    <div id="progressSkippedNotice" class="progress-skipped-notice" role="status" aria-live="polite" hidden><span class="processing-live-dot"></span><span id="progressSkippedText">Operation continues</span><b id="progressSkippedPercent"></b></div>
 
     <div class="modal-backdrop" id="employeeModal">
       <div class="modal employee-modal">
@@ -1102,6 +1179,10 @@
       let pendingDistributionEdit = null;
       let progressTimer = null;
       let progressStartTime = 0;
+      let progressShowTimer = null;
+      let progressActive = false;
+      let progressSkipped = false;
+      let progressOperation = null;
       let reviewSearchText = "";
       let reviewFilter = "All";
       let selectedReviewEmployee = null;
@@ -1125,5 +1206,6 @@
     <script src="./analytics/analytics.js"></script>
     <script src="./dashboard/dashboard.js"></script>
     <script src="./boot.js"></script>
+    <script src="./shared/navigation-search.js"></script>
   </body>
 </html>

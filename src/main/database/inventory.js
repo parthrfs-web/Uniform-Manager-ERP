@@ -1,3 +1,5 @@
+const { ensureAnnualPoliciesForRecognizedItems, suppressAnnualPolicies } = require('./annual-policy-sync');
+
 module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, extractAmount, generateDeductionPdf }) => ({
     upsertItem(item) {
       const normalized = {
@@ -51,23 +53,27 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
     resetItemsAndPolicies() {
       const itemCount = Number(scalar("SELECT COUNT(*) FROM uniform_items") || 0);
       const policyCount = Number(scalar("SELECT COUNT(*) FROM unit_policies") || 0);
+      ensureAnnualPoliciesForRecognizedItems({ db, all, scalar, save, audit, now, isIgnoredIssueItemName });
+      const annualPolicies = all("SELECT id, item_name, financial_year FROM annual_policies");
 
       db.run("BEGIN TRANSACTION");
       try {
+        suppressAnnualPolicies({ db, all, now }, annualPolicies);
         db.run("DELETE FROM uniform_items");
         db.run("DELETE FROM unit_policies");
+        db.run("DELETE FROM annual_policies");
         db.run("COMMIT");
       } catch (error) {
         db.run("ROLLBACK");
         throw error;
       }
 
-      audit("Items and Policies Reset", `${itemCount} inventory item(s) and ${policyCount} unit policy/policies deleted.`, {
+      audit("Items and Policies Reset", `${itemCount} inventory item(s), ${policyCount} unit policy/policies, and ${annualPolicies.length} annual item entitlement(s) deleted.`, {
         entityType: "Master Data",
-        remarks: "Operational employees, distribution records, reviews, payroll, imports, settings, and audit history were retained.",
+        remarks: "Actual item prices, operational employees, distribution records, reviews, payroll, imports, other settings, and audit history were retained. Explicit annual-policy deletion markers prevent automatic synchronization from recreating cleared policies; a policy can be configured again by saving it explicitly.",
       });
       save();
-      return { deletedItems: itemCount, deletedPolicies: policyCount };
+      return { deletedItems: itemCount, deletedPolicies: policyCount, deletedAnnualPolicies: annualPolicies.length };
     },
     updateDistributionRow(record) {
       const { key, quantities } = record;

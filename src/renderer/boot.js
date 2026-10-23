@@ -335,6 +335,19 @@ function injectCorrectionUI() {
 }
 
 // Attach listeners for dynamic views
+window.uniformManager?.onHeldQuantitiesReopened?.(({ reopenedQuantity } = {}) => {
+  const activeView = document.querySelector(".view.active")?.id;
+  const refresh = activeView === "review"
+    ? window.refreshReviewQueue?.()
+    : activeView === "held_records"
+      ? window.loadHeldRecordsPage?.()
+      : null;
+  Promise.resolve(refresh).catch((error) => showImportError(error.message || "Failed to refresh held review data."));
+  if (Number(reopenedQuantity) > 0) {
+    toast(`${Number(reopenedQuantity)} held unit(s) are now available for review.`);
+  }
+});
+
 document.addEventListener("click", (e) => {
     // Handle Navigation routing
     const targetView = e.target.closest("[data-view]");

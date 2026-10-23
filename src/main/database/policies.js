@@ -1,7 +1,7 @@
 const fs = require('fs');
 const { parseCandidate } = require('../import/smart-importer');
 const getMissingAnnualPolicySuggestions = require('./missing-annual-policy-suggestions');
-const { getRecognizedAnnualItems, ensureAnnualPoliciesForRecognizedItems } = require('./annual-policy-sync');
+const { getRecognizedAnnualItems, ensureAnnualPoliciesForRecognizedItems, suppressAnnualPolicy, restoreAnnualPolicy } = require('./annual-policy-sync');
 
 module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, extractAmount, generateDeductionPdf }) => ({
     ensureAnnualPoliciesForRecognizedItems() {
@@ -35,19 +35,21 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       db.run('BEGIN TRANSACTION');
       try {
         validated.forEach((row) => {
-          const existing = all('SELECT * FROM annual_policies WHERE lower(item_name) = lower(?) AND financial_year = ?', [row.item_name, financialYear])[0];
+          restoreAnnualPolicy({ db, all, now }, row.item_name, financialYear);
+          const existing = all('SELECT * FROM annual_policies WHERE lower(trim(item_name)) = lower(trim(?)) AND financial_year = ?', [row.item_name, financialYear])[0];
           if (existing) {
             const oldQuantity = Number(existing.allowed_quantity || 0);
-            if (oldQuantity !== row.allowed_quantity) {
-              db.run('UPDATE annual_policies SET allowed_quantity = ?, updated_at = ? WHERE id = ?', [row.allowed_quantity, now(), existing.id]);
+            const wasConfigured = String(existing.status || 'Active').toLowerCase() === 'active';
+            if (oldQuantity !== row.allowed_quantity || !wasConfigured) {
+              db.run("UPDATE annual_policies SET allowed_quantity = ?, status = 'Active', updated_at = ? WHERE id = ?", [row.allowed_quantity, now(), existing.id]);
               changed += 1;
-              oldValues.push({ item_name: existing.item_name, financial_year: financialYear, allowed_quantity: oldQuantity });
+              oldValues.push({ item_name: existing.item_name, financial_year: financialYear, allowed_quantity: oldQuantity, status: existing.status || 'Active' });
             }
           } else {
             db.run("INSERT INTO annual_policies (item_name, financial_year, allowed_quantity, status, created_at, updated_at) VALUES (?, ?, ?, 'Active', ?, ?)",
               [row.item_name, financialYear, row.allowed_quantity, now(), now()]);
             inserted += 1;
-            if (row.allowed_quantity > 0) changed += 1;
+            changed += 1;
           }
         });
         db.run('COMMIT');
@@ -138,7 +140,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       }
       const existing = normalized.id
         ? all('SELECT * FROM annual_policies WHERE id = ?', [normalized.id])[0]
-        : all('SELECT * FROM annual_policies WHERE lower(item_name) = lower(?) AND financial_year = ?', [normalized.item_name, normalized.financial_year])[0];
+        : all('SELECT * FROM annual_policies WHERE lower(trim(item_name)) = lower(trim(?)) AND financial_year = ?', [normalized.item_name, normalized.financial_year])[0];
       if (normalized.id && !existing) throw new Error(`Annual Policy #${normalized.id} was not found.`);
       if (existing) {
         db.run('UPDATE annual_policies SET item_name = ?, financial_year = ?, allowed_quantity = ?, status = ?, updated_at = ? WHERE id = ?',
@@ -147,7 +149,8 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         db.run('INSERT INTO annual_policies (item_name, financial_year, allowed_quantity, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
           [normalized.item_name, normalized.financial_year, normalized.allowed_quantity, normalized.status, now(), now()]);
       }
-      const saved = all('SELECT * FROM annual_policies WHERE lower(item_name) = lower(?) AND financial_year = ?', [normalized.item_name, normalized.financial_year])[0];
+      const saved = all('SELECT * FROM annual_policies WHERE lower(trim(item_name)) = lower(trim(?)) AND financial_year = ?', [normalized.item_name, normalized.financial_year])[0];
+      restoreAnnualPolicy({ db, all, now }, normalized.item_name, normalized.financial_year);
       audit('Annual Policy Changed', `${normalized.item_name} (FY ${normalized.financial_year})`, { entityType: 'Annual Policy', entityId: saved.id, oldValue: existing || null, newValue: saved });
       save();
       return saved;
@@ -181,7 +184,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           throw new Error('The qualifying Review Queue records changed after this suggestion was opened. Refresh the Entitlements page and use the current suggestion.');
         }
 
-        const existing = all('SELECT * FROM annual_policies WHERE lower(item_name) = lower(?) AND financial_year = ?',
+        const existing = all('SELECT * FROM annual_policies WHERE lower(trim(item_name)) = lower(trim(?)) AND financial_year = ?',
           [normalized.item_name, normalized.financial_year])[0] || null;
         if (existing && String(existing.status || 'Active').toLowerCase() === 'active') {
           throw new Error('An active annual policy now exists for this item and financial year. Refresh the Entitlements page.');
@@ -193,8 +196,9 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
           db.run("INSERT INTO annual_policies (item_name, financial_year, allowed_quantity, status, created_at, updated_at) VALUES (?, ?, ?, 'Active', ?, ?)",
             [suggestion.item_name, normalized.financial_year, normalized.allowed_quantity, now(), now()]);
         }
-        saved = all('SELECT * FROM annual_policies WHERE lower(item_name) = lower(?) AND financial_year = ?',
+        saved = all('SELECT * FROM annual_policies WHERE lower(trim(item_name)) = lower(trim(?)) AND financial_year = ?',
           [normalized.item_name, normalized.financial_year])[0];
+        restoreAnnualPolicy({ db, all, now }, normalized.item_name, normalized.financial_year);
         db.run('COMMIT');
       } catch (error) {
         db.run('ROLLBACK');
@@ -223,7 +227,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       const unitLimit = nonNegative(payload.unit_limit, 'Unit entitlement', true);
       const actualPrice = nonNegative(payload.actual_price, 'Actual Price');
       const oldUnitPolicy = all('SELECT * FROM unit_policies WHERE lower(unit) = lower(?) AND lower(item_name) = lower(?)', [unit, itemName])[0] || null;
-      const oldAnnualPolicy = all('SELECT * FROM annual_policies WHERE lower(item_name) = lower(?) AND financial_year = ?', [itemName, financialYear])[0] || null;
+      const oldAnnualPolicy = all('SELECT * FROM annual_policies WHERE lower(trim(item_name)) = lower(trim(?)) AND financial_year = ?', [itemName, financialYear])[0] || null;
       const oldActualPrice = all('SELECT * FROM actual_item_prices WHERE lower(item_name) = lower(?)', [itemName])[0] || null;
       const unitPolicyChanged = (deductionRate !== null || unitLimit !== null) && (!oldUnitPolicy
         || (deductionRate !== null && Number(oldUnitPolicy.item_cost) !== deductionRate)
@@ -241,6 +245,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         if (annualLimit !== null) {
           db.run(`INSERT INTO annual_policies (item_name, financial_year, allowed_quantity, status, created_at, updated_at)
             VALUES (?, ?, ?, 'Active', ?, ?) ON CONFLICT(lower(item_name), financial_year) DO UPDATE SET allowed_quantity = excluded.allowed_quantity, updated_at = excluded.updated_at`, [itemName, financialYear, annualLimit, now(), now()]);
+          restoreAnnualPolicy({ db, all, now }, itemName, financialYear);
         }
         if (actualPrice !== null) db.run(`INSERT INTO actual_item_prices (item_name, actual_price, created_at, updated_at) VALUES (?, ?, ?, ?)
           ON CONFLICT(item_name) DO UPDATE SET actual_price = excluded.actual_price, updated_at = excluded.updated_at`, [itemName, actualPrice, now(), now()]);
@@ -250,7 +255,7 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         throw error;
       }
       const newUnitPolicy = all('SELECT * FROM unit_policies WHERE lower(unit) = lower(?) AND lower(item_name) = lower(?)', [unit, itemName])[0] || null;
-      const newAnnualPolicy = all('SELECT * FROM annual_policies WHERE lower(item_name) = lower(?) AND financial_year = ?', [itemName, financialYear])[0] || null;
+      const newAnnualPolicy = all('SELECT * FROM annual_policies WHERE lower(trim(item_name)) = lower(trim(?)) AND financial_year = ?', [itemName, financialYear])[0] || null;
       const newActualPrice = all('SELECT * FROM actual_item_prices WHERE lower(item_name) = lower(?)', [itemName])[0] || null;
       if (unitPolicyChanged || annualPolicyChanged || actualPriceChanged) {
         audit('Detailed Report Item Values Changed', `${itemName} — ${unit} — FY ${financialYear}`, {
@@ -265,9 +270,18 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
     deleteAnnualPolicy(policyId) {
       const existing = all('SELECT * FROM annual_policies WHERE id = ?', [Number(policyId)])[0];
       if (!existing) throw new Error(`Annual Policy #${policyId} was not found.`);
-      db.run('DELETE FROM annual_policies WHERE id = ?', [Number(policyId)]);
+      db.run('BEGIN TRANSACTION');
+      try {
+        suppressAnnualPolicy({ db, all, now }, existing.item_name, Number(existing.financial_year));
+        db.run('DELETE FROM annual_policies WHERE id = ?', [Number(policyId)]);
+        db.run('COMMIT');
+      } catch (error) {
+        db.run('ROLLBACK');
+        throw error;
+      }
       audit('Annual Policy Deleted', `${existing.item_name} (FY ${existing.financial_year})`, { entityType: 'Annual Policy', entityId: existing.id, oldValue: existing });
       save();
+      return { deleted: true, item_name: existing.item_name, financial_year: Number(existing.financial_year) };
     },
     getActualPriceData() {
       let historicalImportItemsUpdated = false;

@@ -23,6 +23,7 @@ async function main() {
   db.upsertItem({ item_code: 'ANNUAL-MASTER-ONLY', item_name: 'Master Only Coat', category: 'Uniform', size: 'Standard', cost: 0 });
   db.upsertAnnualPolicy({ item_name: 'Imported Coat', financial_year: 2024, allowed_quantity: 7 });
   db.upsertAnnualPolicy({ item_name: 'Imported Coat', financial_year: 2025, allowed_quantity: 4 });
+  db.upsertPolicy({ unit: 'UNIT-A', item_name: 'Imported Cap', yearly_entitlement: 9, item_cost: 0 });
   db.recalculateReviews();
 
   let state = db.getState({ distributionLimit: 1000 });
@@ -94,7 +95,7 @@ async function main() {
   if (!state.annualPolicies.some((row) => row.item_name === 'Imported Cap' && Number(row.financial_year) === 2025 && Number(row.allowed_quantity) === 3)) {
     throw new Error('Bulk annual quantities did not persist after reopening the database.');
   }
-  if (state.policies.find((row) => row.unit === 'UNIT-A' && row.item_name === 'Imported Cap')?.yearly_entitlement !== 0) {
+  if (state.policies.find((row) => row.unit === 'UNIT-A' && row.item_name === 'Imported Cap')?.yearly_entitlement !== 9) {
     throw new Error('Annual bulk editing unexpectedly modified Unit-wise entitlements.');
   }
 

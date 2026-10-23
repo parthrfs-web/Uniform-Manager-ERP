@@ -1,4 +1,5 @@
 const { ensureAnnualPoliciesForRecognizedItems } = require('./annual-policy-sync');
+const { normalizeEntitlementLabel, getEntitlementFinancialYear } = require('./entitlement-scope');
 
 module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, ensureDefaultPoliciesForIssueRows, extractAmount, generateDeductionPdf, reopenDueHeldReviews }) => ({
     recordImport(importRecord) {
@@ -139,20 +140,13 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
       save();
     },
     ensureDefaultPoliciesForImport(importId) {
-      const created = ensureDefaultPoliciesForIssueRows(importId);
-      if (created) {
-        audit("Default Policies Created", `${created} unit/item policy rows created with allowed qty 0.`, {
-          entityType: "Policy",
-          entityId: importId || null,
-        });
-        save();
-      }
-      return created;
+      // Legacy API retained for compatibility; unknown policy must not become 0.
+      return 0;
     },
     
-    evaluateEntitlementsForImport(importId, progressCallback, onlyEmployeeCode = null) {
+    evaluateEntitlementsForImport(importId, progressCallback, onlyEmployeeCode = null, options = {}) {
         ensureAnnualPoliciesForRecognizedItems({ db, all, scalar, save, audit, now, isIgnoredIssueItemName });
-        if (typeof reopenDueHeldReviews === 'function') reopenDueHeldReviews();
+        if (!options.deferHoldReconciliation && typeof reopenDueHeldReviews === 'function') reopenDueHeldReviews();
         const targetEmployees = onlyEmployeeCode
             ? [String(onlyEmployeeCode)]
             : importId
@@ -164,10 +158,10 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         const configuredMode = scalar("SELECT setting_value FROM app_settings WHERE setting_key = 'review_queue_calculation_mode'");
         const mode = ["item_annual", "unit_wise", "combined"].includes(configuredMode) ? configuredMode : "item_annual";
         const policies = all("SELECT * FROM unit_policies");
-        const unitPolicyMap = new Map(policies.map((policy) => [`${String(policy.unit).toLowerCase()}|${String(policy.item_name).toLowerCase()}`, Number(policy.yearly_entitlement || 0)]));
-        const costMap = new Map(policies.map(p => [`${String(p.unit).toLowerCase()}|${String(p.item_name).toLowerCase()}`, Number(p.item_cost || 0)]));
-        const annualPolicies = all("SELECT * FROM annual_policies WHERE COALESCE(status, 'Active') = 'Active'");
-        const annualLimitMap = new Map(annualPolicies.map((policy) => [`${String(policy.item_name).toLowerCase()}|${Number(policy.financial_year)}`, Number(policy.allowed_quantity || 0)]));
+        const unitPolicyMap = new Map(policies.map((policy) => [`${normalizeEntitlementLabel(policy.unit)}|${normalizeEntitlementLabel(policy.item_name)}`, Number(policy.yearly_entitlement || 0)]));
+        const costMap = new Map(policies.map(p => [`${normalizeEntitlementLabel(p.unit)}|${normalizeEntitlementLabel(p.item_name)}`, Number(p.item_cost || 0)]));
+        const annualPolicies = all("SELECT * FROM annual_policies WHERE lower(trim(COALESCE(status, 'Active'))) = 'active'");
+        const annualLimitMap = new Map(annualPolicies.map((policy) => [`${normalizeEntitlementLabel(policy.item_name)}|${Number(policy.financial_year)}`, Number(policy.allowed_quantity || 0)]));
 
         let generatedCount = 0;
         const total = targetEmployees.length;
@@ -189,45 +183,53 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
             const unitBalances = new Map();
             const annualBalances = new Map();
             const pendingByUnitItem = new Map();
-            const allItemUnitIssued = new Map();
+            const issuedByScope = new Map();
 
             for (const issue of issues) {
                 const quantity = Number(issue.quantity || 0);
                 const itemName = issue.item_name;
-                const itemKey = String(itemName).toLowerCase();
+                const itemKey = normalizeEntitlementLabel(itemName);
                 const unit = issue.unit || "";
-                const unitKey = `${String(unit).toLowerCase()}|${itemKey}`;
-                const financialYear = issue.issue_year ? ((issue.issue_month && issue.issue_month >= 4) ? Number(issue.issue_year) : Number(issue.issue_year) - 1) : 9999;
+                const unitPolicyKey = `${normalizeEntitlementLabel(unit)}|${itemKey}`;
+                const financialYear = getEntitlementFinancialYear(issue);
+                const financialYearKey = financialYear === null ? 'unknown' : String(financialYear);
+                const unitKey = `${unitPolicyKey}|${financialYearKey}`;
                 const annualKey = `${itemKey}|${financialYear}`;
-                allItemUnitIssued.set(unitKey, (allItemUnitIssued.get(unitKey) || 0) + quantity);
+                issuedByScope.set(`${itemKey}|${financialYearKey}`, (issuedByScope.get(`${itemKey}|${financialYearKey}`) || 0) + quantity);
+                issuedByScope.set(`${unitKey}`, (issuedByScope.get(unitKey) || 0) + quantity);
 
-                if (!unitBalances.has(unitKey)) unitBalances.set(unitKey, unitPolicyMap.has(unitKey) ? unitPolicyMap.get(unitKey) : 0);
-                if (!annualBalances.has(annualKey)) annualBalances.set(annualKey, annualLimitMap.has(annualKey) ? annualLimitMap.get(annualKey) : 0);
-                const unitAllowed = unitPolicyMap.has(unitKey) ? unitPolicyMap.get(unitKey) : null;
+                if (!unitBalances.has(unitKey) && unitPolicyMap.has(unitPolicyKey)) unitBalances.set(unitKey, unitPolicyMap.get(unitPolicyKey));
+                if (!annualBalances.has(annualKey) && annualLimitMap.has(annualKey)) annualBalances.set(annualKey, annualLimitMap.get(annualKey));
+                const unitAllowed = unitPolicyMap.has(unitPolicyKey) ? unitPolicyMap.get(unitPolicyKey) : null;
                 const annualAllowed = annualLimitMap.has(annualKey) ? annualLimitMap.get(annualKey) : null;
                 const existingChildren = all("SELECT * FROM review_queue_items WHERE uniform_issue_id = ? AND COALESCE(is_active, 1) = 1 ORDER BY id", [issue.id]);
                 const resolvedQty = existingChildren.reduce((sum, child) => sum + Number(child.deducted_quantity || 0) + Number(child.waived_quantity || 0) + Number(child.held_quantity || 0), 0);
 
-                const unitRawExcess = Math.max(0, quantity - Math.min(quantity, unitBalances.get(unitKey)));
-                const annualRawExcess = Math.max(0, quantity - Math.min(quantity, annualBalances.get(annualKey)));
+                const unitRawExcess = unitAllowed === null ? 0 : Math.max(0, quantity - Math.min(quantity, unitBalances.get(unitKey) || 0));
+                const annualRawExcess = annualAllowed === null ? 0 : Math.max(0, quantity - Math.min(quantity, annualBalances.get(annualKey) || 0));
                 const unitExcess = Math.max(unitRawExcess, mode === "unit_wise" || mode === "combined" ? Math.min(quantity, resolvedQty) : 0);
                 const annualExcess = Math.max(annualRawExcess, mode === "item_annual" || mode === "combined" ? Math.min(quantity, resolvedQty) : 0);
 
-                if (mode === "unit_wise" || mode === "combined") unitBalances.set(unitKey, Math.max(0, unitBalances.get(unitKey) - (quantity - unitExcess)));
-                if (mode === "item_annual" || mode === "combined") annualBalances.set(annualKey, Math.max(0, annualBalances.get(annualKey) - (quantity - annualExcess)));
+                if ((mode === "unit_wise" || mode === "combined") && unitAllowed !== null) unitBalances.set(unitKey, Math.max(0, (unitBalances.get(unitKey) || 0) - (quantity - unitExcess)));
+                if ((mode === "item_annual" || mode === "combined") && annualAllowed !== null) annualBalances.set(annualKey, Math.max(0, (annualBalances.get(annualKey) || 0) - (quantity - annualExcess)));
 
+                const policyConfigured = mode === "item_annual" ? annualAllowed !== null
+                    : mode === "unit_wise" ? unitAllowed !== null : (annualAllowed !== null || unitAllowed !== null);
                 let policyExcess = mode === "item_annual" ? annualRawExcess : mode === "unit_wise" ? unitRawExcess : Math.max(unitRawExcess, annualRawExcess);
                 policyExcess = Math.min(quantity, policyExcess);
                 const finalExcess = Math.min(quantity, Math.max(policyExcess, resolvedQty));
-                const consumed = Math.max(0, quantity - finalExcess);
+                const consumed = policyConfigured ? Math.max(0, quantity - finalExcess) : 0;
                 db.run('UPDATE uniform_issues SET entitlement_consumed = ?, excess_generated = ? WHERE id = ?', [consumed, finalExcess, issue.id]);
                 const pendingExcess = Math.max(0, finalExcess - resolvedQty);
+                let reusablePendingChild = null;
                 for (const child of existingChildren) {
                     const allocated = Number(child.deducted_quantity || 0) + Number(child.waived_quantity || 0) + Number(child.held_quantity || 0);
                     affectedParents.add(Number(child.review_queue_id));
                     if (allocated <= 0) {
-                        // Retain the old row for audit/history, but deactivate only its replaceable pending quantity.
-                        db.run("UPDATE review_queue_items SET is_active = 0 WHERE id = ? AND COALESCE(is_active, 1) = 1", [child.id]);
+                        // Reuse a still-pending child so routine recalculation
+                        // does not churn its ID or accumulate duplicate history rows.
+                        if (!reusablePendingChild) reusablePendingChild = child;
+                        else db.run("UPDATE review_queue_items SET is_active = 0 WHERE id = ? AND COALESCE(is_active, 1) = 1", [child.id]);
                         continue;
                     }
                     const decision = Number(child.held_quantity || 0) > 0
@@ -238,24 +240,36 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
                     db.run("UPDATE review_queue_items SET quantity = ?, decision = ? WHERE id = ?", [allocated, decision, child.id]);
                 }
 
+                if (reusablePendingChild) {
+                    if (pendingExcess > 0) {
+                        db.run("UPDATE review_queue_items SET quantity = ?, decision = 'Pending' WHERE id = ? AND COALESCE(is_active, 1) = 1",
+                            [pendingExcess, reusablePendingChild.id]);
+                    } else {
+                        db.run("UPDATE review_queue_items SET is_active = 0 WHERE id = ? AND COALESCE(is_active, 1) = 1", [reusablePendingChild.id]);
+                    }
+                }
+
                 if (pendingExcess > 0 && existingChildren.length > 0) {
-                    const parentId = Number(existingChildren[existingChildren.length - 1].review_queue_id);
+                    const parentId = Number(reusablePendingChild?.review_queue_id || existingChildren[existingChildren.length - 1].review_queue_id);
                     const effectiveAllowed = mode === "item_annual" ? annualAllowed : mode === "unit_wise" ? unitAllowed : (annualAllowed ?? unitAllowed);
                     const reason = mode === "item_annual"
                         ? (annualAllowed === null ? `No annual entitlement policy found for ${itemName}.` : `${itemName} annual entitlement exceeded.`)
                         : mode === "unit_wise"
                             ? (unitAllowed === null ? `No entitlement policy found for ${unit || "Unknown Unit"} / ${itemName}.` : `${itemName} unit entitlement exceeded.`)
                             : `Combined annual and unit entitlement review for ${itemName}.`;
-                    const issuedForUnit = allItemUnitIssued.get(unitKey) || 0;
-                    const itemCost = costMap.get(unitKey) || 0;
+                    const issuedForScope = mode === 'unit_wise' ? (issuedByScope.get(unitKey) || 0) : (issuedByScope.get(`${itemKey}|${financialYearKey}`) || 0);
+                    const itemCost = costMap.get(unitPolicyKey) || 0;
                     db.run("UPDATE review_queue SET allowed_qty = ?, issued_qty = ?, item_cost = ?, reason = ? WHERE id = ?",
-                        [effectiveAllowed, issuedForUnit, itemCost, reason, parentId]);
-                    db.run(`INSERT INTO review_queue_items (review_queue_id, uniform_issue_id, employee_code, item_name, issue_date, quantity, decision, remarks, reviewed_by, reviewed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, 'Pending', '', NULL, NULL, ?)`,
-                        [parentId, issue.id, empCode, itemName, issue.issued_at, pendingExcess, now()]);
+                        [effectiveAllowed, issuedForScope, itemCost, reason, parentId]);
+                    if (!reusablePendingChild) {
+                        db.run(`INSERT INTO review_queue_items (review_queue_id, uniform_issue_id, employee_code, item_name, issue_date, quantity, decision, remarks, reviewed_by, reviewed_at, created_at) VALUES (?, ?, ?, ?, ?, ?, 'Pending', '', NULL, NULL, ?)`,
+                            [parentId, issue.id, empCode, itemName, issue.issued_at, pendingExcess, now()]);
+                    }
                     affectedParents.add(parentId);
                 } else if (pendingExcess > 0) {
-                    if (!pendingByUnitItem.has(unitKey)) pendingByUnitItem.set(unitKey, { unit, itemName, itemCost: costMap.get(unitKey) || 0, issues: [], totalExcess: 0, annualAllowed, unitAllowed });
-                    const group = pendingByUnitItem.get(unitKey);
+                    const groupKey = `${unitKey}|${itemKey}`;
+                    if (!pendingByUnitItem.has(groupKey)) pendingByUnitItem.set(groupKey, { unit, itemName, itemCost: costMap.get(unitPolicyKey) || 0, issues: [], totalExcess: 0, annualAllowed, unitAllowed, financialYear, itemKey, unitKey });
+                    const group = pendingByUnitItem.get(groupKey);
                     group.issues.push({ issue, pendingExcess });
                     group.totalExcess += pendingExcess;
                 }
@@ -269,9 +283,11 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
                     : mode === "unit_wise"
                         ? (group.unitAllowed === null ? `No entitlement policy found for ${group.unit || "Unknown Unit"} / ${group.itemName}.` : `${group.itemName} unit entitlement exceeded.`)
                         : `Combined annual and unit entitlement review for ${group.itemName}.`;
-                const issuedForUnit = allItemUnitIssued.get(unitKey) || 0;
+                const itemKey = group.itemKey;
+                const financialYearKey = group.financialYear === null ? 'unknown' : String(group.financialYear);
+                const issuedForScope = mode === 'unit_wise' ? (issuedByScope.get(group.unitKey) || 0) : (issuedByScope.get(`${itemKey}|${financialYearKey}`) || 0);
                 db.run(`INSERT INTO review_queue (employee_code, employee_name, unit, item_name, issue_month, issue_year, issue_period_label, issued_qty, allowed_qty, excess_qty, item_cost, estimated_amount, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)`,
-                    [empCode, sampleIssue.employee_name, group.unit, group.itemName, sampleIssue.issue_month, sampleIssue.issue_year, sampleIssue.issue_period_label, issuedForUnit, effectiveAllowed, group.totalExcess, group.itemCost, group.totalExcess * group.itemCost, reason, now()]);
+                    [empCode, sampleIssue.employee_name, group.unit, group.itemName, sampleIssue.issue_month, sampleIssue.issue_year, sampleIssue.issue_period_label, issuedForScope, effectiveAllowed, group.totalExcess, group.itemCost, group.totalExcess * group.itemCost, reason, now()]);
                 const rqId = scalar("SELECT last_insert_rowid()");
                 affectedParents.add(Number(rqId));
                 for (const ext of group.issues) {
@@ -299,24 +315,21 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
                 // still showed the old allowance and excess snapshot.
                 const review = all("SELECT employee_code, item_name, unit, issue_month, issue_year FROM review_queue WHERE id = ?", [reviewId])[0];
                 if (review) {
-                    const year = Number(review.issue_year || 0);
-                    const month = Number(review.issue_month || 0);
-                    const financialYear = year ? (month >= 4 ? year : year - 1) : 9999;
-                    const annualAllowed = annualLimitMap.has(`${String(review.item_name).toLowerCase()}|${financialYear}`)
-                        ? annualLimitMap.get(`${String(review.item_name).toLowerCase()}|${financialYear}`) : null;
-                    const unitKey = `${String(review.unit || '').toLowerCase()}|${String(review.item_name).toLowerCase()}`;
-                    const unitAllowed = unitPolicyMap.has(unitKey) ? unitPolicyMap.get(unitKey) : null;
+                    const financialYear = getEntitlementFinancialYear(review);
+                    const financialYearKey = financialYear === null ? 'unknown' : String(financialYear);
+                    const itemKey = normalizeEntitlementLabel(review.item_name);
+                    const annualAllowed = annualLimitMap.has(`${itemKey}|${financialYear}`)
+                        ? annualLimitMap.get(`${itemKey}|${financialYear}`) : null;
+                    const unitPolicyKey = `${normalizeEntitlementLabel(review.unit)}|${itemKey}`;
+                    const unitAllowed = unitPolicyMap.has(unitPolicyKey) ? unitPolicyMap.get(unitPolicyKey) : null;
                     const effectiveAllowed = mode === "item_annual" ? annualAllowed
                         : mode === "unit_wise" ? unitAllowed : (annualAllowed ?? unitAllowed);
-                    const unitScope = mode === "unit_wise" ? "AND lower(COALESCE(unit, '')) = lower(COALESCE(?, ''))" : "";
-                    const issuedParams = mode === "unit_wise"
-                        ? [review.employee_code, review.item_name, review.unit, financialYear]
-                        : [review.employee_code, review.item_name, financialYear];
-                    const issued = scalar(`SELECT COALESCE(SUM(quantity), 0) FROM uniform_issues
-                        WHERE employee_code = ? AND lower(item_name) = lower(?) ${unitScope}
-                          AND CASE WHEN COALESCE(issue_month, 0) >= 4 THEN CAST(issue_year AS INTEGER)
-                                   ELSE CAST(issue_year AS INTEGER) - 1 END = ?`,
-                    issuedParams);
+                    const issued = issues.reduce((sum, issue) => {
+                        if (normalizeEntitlementLabel(issue.item_name) !== itemKey
+                            || getEntitlementFinancialYear(issue) !== financialYear) return sum;
+                        if (mode === 'unit_wise' && normalizeEntitlementLabel(issue.unit) !== normalizeEntitlementLabel(review.unit)) return sum;
+                        return sum + Number(issue.quantity || 0);
+                    }, 0);
                     db.run("UPDATE review_queue SET allowed_qty = ?, issued_qty = ? WHERE id = ?",
                         [effectiveAllowed, Number(issued || 0), reviewId]);
                 }
@@ -393,9 +406,9 @@ module.exports = ({ db, scalar, all, save, audit, now, normalizeLabel, isIgnored
         db.run("ROLLBACK");
         throw error;
       }
-      audit("Operational Data Reset", "Employees, distribution register, review queue and deduction records cleared. Unit policies were kept.", {
+      audit("Operational Data Reset", "Employees, distribution register, review queue and deduction records cleared. Unit policies, annual item entitlements, actual item prices, and item settings were kept.", {
         entityType: "System",
-        remarks: "Unit policies and item settings were kept.",
+        remarks: "Unit policies, annual item entitlements, actual item prices, and item settings were kept.",
       });
       save();
     }
