@@ -58,8 +58,8 @@ function renderHeldRecords() {
       <td>${escapeHtml(row.unit || '-')}</td><td>${escapeHtml(row.item_name)}</td><td>${escapeHtml(heldPeriod(row) || '-')}</td>
       <td>${Number(row.original_excess_qty || 0)}</td><td class="text-red">${Number(row.deducted_quantity || 0)}</td>
       <td class="text-green">${Number(row.waived_quantity || 0)}</td><td class="text-blue"><strong>${Number(row.held_quantity || 0)}</strong></td>
-      <td>${escapeHtml(row.hold_reason || '-')}</td><td>${row.reviewed_at ? escapeHtml(String(row.reviewed_at).split('T')[0]) : (row.hold_date ? escapeHtml(String(row.hold_date).split('T')[0]) : '-')}</td>
-      <td><div class="row-actions"><button type="button" class="secondary" data-held-view="${row.review_id}:${row.item_id}">View Details</button><button type="button" class="primary" data-held-resolve="${row.review_id}:${row.item_id}">Resolve Hold</button></div></td>
+      <td>${escapeHtml(row.hold_event_reason || row.hold_reason || '-')}</td><td>${row.hold_date ? escapeHtml(String(row.hold_date).split('T')[0]) : (row.reviewed_at ? escapeHtml(String(row.reviewed_at).split('T')[0]) : '-')}</td>
+      <td><div class="row-actions"><button type="button" class="secondary" data-held-view="${row.review_id}:${row.item_id}">View Details</button><button type="button" class="secondary" data-held-review="${row.review_id}:${row.item_id}">Review Now</button><button type="button" class="primary" data-held-resolve="${row.review_id}:${row.item_id}">Resolve Hold</button></div></td>
     </tr>`).join('');
   document.getElementById('heldRecordsRows').innerHTML = rows || '<tr><td colspan="13" class="empty">No held records match these filters.</td></tr>';
 }
@@ -97,9 +97,11 @@ document.getElementById('heldClearFilters')?.addEventListener('click', () => {
 document.addEventListener('click', async (event) => {
   const detailButton = event.target.closest('[data-held-view]');
   const resolveButton = event.target.closest('[data-held-resolve]');
-  const button = detailButton || resolveButton;
+  const reviewButton = event.target.closest('[data-held-review]');
+  const button = detailButton || resolveButton || reviewButton;
   if (!button) return;
-  const [reviewIdText, itemIdText] = (detailButton ? detailButton.dataset.heldView : resolveButton.dataset.heldResolve).split(':');
+  const rowAction = detailButton ? detailButton.dataset.heldView : (resolveButton ? resolveButton.dataset.heldResolve : reviewButton.dataset.heldReview);
+  const [reviewIdText, itemIdText] = rowAction.split(':');
   const row = heldRecordsCache.find((item) => String(item.review_id) === reviewIdText && String(item.item_id) === itemIdText);
   if (!row) return toast('This held record was already resolved. Refresh the page.');
   const [review] = await window.uniformManager.getReviewQueueStage2(row.employee_code).then((items) => items.filter((item) => String(item.id) === reviewIdText));
@@ -107,6 +109,16 @@ document.addEventListener('click', async (event) => {
   if (!review || !child) return toast('The held transaction could not be loaded.');
   if (detailButton) {
     window.showHeldRecordDetails(row, review, child);
+    return;
+  }
+  if (reviewButton) {
+    try {
+      await window.uniformManager.reviewHeldNow({ reviewId: Number(reviewIdText), itemId: Number(itemIdText), quantity: Number(child.held_quantity), employeeCode: row.employee_code, actor: 'Admin' });
+      await window.loadHeldRecordsPage();
+      await window.openHeldQuantityReview({ reviewId: Number(reviewIdText), itemId: Number(itemIdText), quantity: Number(child.held_quantity), employeeCode: row.employee_code });
+    } catch (error) {
+      showImportError(error.message || 'Unable to start early review for this held quantity.');
+    }
     return;
   }
   window.openHeldRecordResolution(review, child);
@@ -126,10 +138,11 @@ window.showHeldRecordDetails = function(row, review, child) {
       <div><small>Currently Held</small><br><strong class="text-blue">${Number(child.held_quantity || 0)}</strong></div>
       <div><small>Remaining Undecided</small><br><strong class="text-amber">${Number(child.remaining_quantity || 0)}</strong></div>
       <div><small>Distribution Date</small><br><strong>${escapeHtml(child.issue_date || '-')}</strong></div>
-      <div><small>Hold Date</small><br><strong>${escapeHtml(row.reviewed_at || '-')}</strong></div>
+      <div><small>Hold Date</small><br><strong>${escapeHtml(row.hold_date || row.reviewed_at || '-')}</strong></div>
     </div>
     <div style="margin-top:16px;"><small>Hold Reason</small><div>${escapeHtml(row.hold_reason || 'Not recorded')}</div></div>
-    <div style="margin-top:12px;"><small>Distribution Remarks</small><div>${escapeHtml(child.issue_remarks || 'Not recorded')}</div></div>`;
+    <div style="margin-top:12px;"><small>Distribution Remarks</small><div>${escapeHtml(child.issue_remarks || 'Not recorded')}</div></div>
+    <div style="margin-top:12px;"><small>Hold / Re-review History</small><div>${(child.hold_history || []).map((entry) => `${escapeHtml(entry.event_type)} · ${Number(entry.quantity)} · ${escapeHtml(entry.created_at || '')}${entry.reason ? ` · ${escapeHtml(entry.reason)}` : ''}`).join('<br>') || 'Not recorded'}</div></div>`;
   document.getElementById('heldDetailsModal').classList.add('show');
 };
 

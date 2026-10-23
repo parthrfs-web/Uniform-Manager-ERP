@@ -39,7 +39,7 @@ async function exportToExcel(window, config) {
 }
 
 async function exportAnalyticsExcel(window, config) {
-    const { filename, sheetName, reportTitle, filtersUsed, generatedDate, summary, headers, data } = config;
+    const { filename, sheetName, reportTitle, filtersUsed, generatedDate, summary, headers, data, worksheetRows, columnWidths, freezePane, merges, autoFilter } = config;
 
     const { canceled, filePath } = await dialog.showSaveDialog(window, {
         title: 'Export Analytics to Excel',
@@ -51,6 +51,17 @@ async function exportAnalyticsExcel(window, config) {
 
     try {
         const wsData = [];
+        if (Array.isArray(worksheetRows)) {
+            const wb = XLSX.utils.book_new();
+            const ws = XLSX.utils.aoa_to_sheet(worksheetRows);
+            if (Array.isArray(columnWidths)) ws['!cols'] = columnWidths.map((wch) => ({ wch }));
+            if (freezePane) ws['!views'] = [{ state: 'frozen', xSplit: Number(freezePane.xSplit || 0), ySplit: Number(freezePane.ySplit || 0) }];
+            if (Array.isArray(merges)) ws['!merges'] = merges.map((merge) => ({ s: { r: merge.startRow, c: merge.startCol }, e: { r: merge.endRow, c: merge.endCol } }));
+            if (autoFilter) ws['!autofilter'] = { ref: autoFilter };
+            XLSX.utils.book_append_sheet(wb, ws, sheetName || "Analytics");
+            XLSX.writeFile(wb, filePath);
+            return { canceled: false, filePath };
+        }
         
         wsData.push([reportTitle]);
         wsData.push(["Generated At:", generatedDate]);

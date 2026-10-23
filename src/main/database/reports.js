@@ -1,5 +1,9 @@
+const getMissingAnnualPolicySuggestions = require('./missing-annual-policy-suggestions');
+const { getRecognizedAnnualItems, ensureAnnualPoliciesForRecognizedItems } = require('./annual-policy-sync');
+
 module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, isIgnoredIssueItemName, classifyReviewReason, extractAmount, generateDeductionPdf }) => ({
     getState(options = {}) {
+      ensureAnnualPoliciesForRecognizedItems({ db, all, scalar, save, audit, now, isIgnoredIssueItemName });
       const limitParam = options ? options.distributionLimit : undefined;
       const distributionLimit = limitParam !== undefined 
           ? Math.max(300, Math.min(Number(limitParam), 20000)) 
@@ -9,12 +13,30 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         .filter((row) => !isIgnoredIssueItemName(row.item_name));
       
       const policies = all("SELECT * FROM unit_policies ORDER BY unit, item_name");
+      const annualPolicies = all("SELECT * FROM annual_policies ORDER BY financial_year DESC, item_name ASC");
+      const configuredReviewMode = scalar("SELECT setting_value FROM app_settings WHERE setting_key = 'review_queue_calculation_mode'");
+      const reviewMode = ["item_annual", "unit_wise", "combined"].includes(configuredReviewMode) ? configuredReviewMode : "item_annual";
+      const entitlementItems = getRecognizedAnnualItems(all, isIgnoredIssueItemName);
+      const entitlementUnits = all(`SELECT unit FROM (
+        SELECT TRIM(unit) AS unit FROM employees WHERE TRIM(COALESCE(unit, '')) <> ''
+        UNION SELECT TRIM(unit) AS unit FROM uniform_issues WHERE TRIM(COALESCE(unit, '')) <> ''
+        UNION SELECT TRIM(unit) AS unit FROM unit_policies WHERE TRIM(COALESCE(unit, '')) <> ''
+      ) ORDER BY lower(unit), unit`).map((row) => row.unit);
+      const currentDate = new Date();
+      const currentFinancialYear = currentDate.getMonth() >= 3 ? currentDate.getFullYear() : currentDate.getFullYear() - 1;
+      const annualFinancialYears = new Set([currentFinancialYear, ...annualPolicies.map((policy) => Number(policy.financial_year))]);
+      all(`SELECT DISTINCT CASE WHEN issue_month >= 4 THEN issue_year ELSE issue_year - 1 END AS financial_year
+        FROM uniform_issues WHERE issue_year IS NOT NULL`).forEach((row) => {
+        const year = Number(row.financial_year);
+        if (Number.isInteger(year) && year >= 1900 && year <= 9998) annualFinancialYears.add(year);
+      });
       const policyByUnitItem = new Map(
         policies.map((policy) => [
           `${normalizeLabel(policy.unit)}|${normalizeLabel(policy.item_name)}`,
           policy,
         ])
       );
+      const annualPolicyByItemYear = new Map(annualPolicies.filter((policy) => String(policy.status || "Active").toLowerCase() === "active").map((policy) => [`${normalizeLabel(policy.item_name)}|${Number(policy.financial_year)}`, policy]));
       
       const itemOrder = new Map();
       issueRows.forEach((row) => {
@@ -39,6 +61,8 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
             issue_year: row.issue_year || null,
             issue_period_label: periodLabel,
             quantities: {},
+            consumed: {},
+            excess: {},
             entitlements: {},
             total_quantity: 0,
             total_allowed: 0,
@@ -53,6 +77,8 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         }
         const target = matrixByEmployee.get(key);
         target.quantities[row.item_name] = Number(target.quantities[row.item_name] || 0) + Number(row.quantity || 0);
+        target.consumed[row.item_name] = Number(target.consumed[row.item_name] || 0) + Number(row.entitlement_consumed || 0);
+        target.excess[row.item_name] = Number(target.excess[row.item_name] || 0) + Number(row.excess_generated || 0);
         target.total_quantity += Number(row.quantity || 0);
         target.first_source_row = Math.min(target.first_source_row || Number(row.source_row || 0), Number(row.source_row || 0));
         target.latest_import_id = Math.max(target.latest_import_id || 0, Number(row.import_id || 0));
@@ -67,20 +93,33 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
             employeeRow.entitlements[itemName] = { issued: 0, allowed: 0, balance: 0, status: "None" };
             return;
           }
-          const policy = policyByUnitItem.get(`${normalizeLabel(employeeRow.unit)}|${normalizeLabel(itemName)}`);
-          if (!policy) {
+          const issueYear = Number(employeeRow.issue_year || 0);
+          const issueMonth = Number(employeeRow.issue_month || 0);
+          const financialYear = issueYear ? (issueMonth >= 4 ? issueYear : issueYear - 1) : 9999;
+          const annualPolicy = annualPolicyByItemYear.get(`${normalizeLabel(itemName)}|${financialYear}`);
+          const unitPolicy = policyByUnitItem.get(`${normalizeLabel(employeeRow.unit)}|${normalizeLabel(itemName)}`);
+          const needsAnnualPolicy = reviewMode === "item_annual" || reviewMode === "combined";
+          const needsUnitPolicy = reviewMode === "unit_wise" || reviewMode === "combined";
+          if ((needsAnnualPolicy && !annualPolicy) || (needsUnitPolicy && !unitPolicy)) {
+            const consumed = Number(employeeRow.consumed[itemName] || 0);
+            const excess = Number(employeeRow.excess[itemName] || 0);
             employeeRow.has_missing_policy = true;
-            employeeRow.entitlements[itemName] = { issued, allowed: null, balance: null, status: "Missing Policy" };
+            employeeRow.total_allowed += consumed;
+            employeeRow.total_excess += excess;
+            if (excess > 0) employeeRow.has_excess = true;
+            employeeRow.entitlements[itemName] = { issued, allowed: null, annual_allowed: annualPolicy ? Number(annualPolicy.allowed_quantity || 0) : null, unit_allowed: unitPolicy ? Number(unitPolicy.yearly_entitlement || 0) : null, consumed, excess, balance: null, status: "Missing Policy" };
             return;
           }
-          const allowed = Number(policy.yearly_entitlement || 0);
-          const balance = allowed - issued;
-          employeeRow.total_allowed += allowed;
-          if (balance < 0) {
+          const allowed = reviewMode === "unit_wise" ? Number(unitPolicy.yearly_entitlement || 0) : Number(annualPolicy.allowed_quantity || 0);
+          const consumed = Number(employeeRow.consumed[itemName] || 0);
+          const excess = Number(employeeRow.excess[itemName] || 0);
+          const balance = allowed - consumed;
+          employeeRow.total_allowed += consumed;
+          if (excess > 0) {
             employeeRow.has_excess = true;
-            employeeRow.total_excess += Math.abs(balance);
+            employeeRow.total_excess += excess;
           }
-          employeeRow.entitlements[itemName] = { issued, allowed, balance, status: balance < 0 ? "Excess" : "OK" };
+          employeeRow.entitlements[itemName] = { issued, allowed, annual_allowed: annualPolicy ? Number(annualPolicy.allowed_quantity || 0) : null, unit_allowed: unitPolicy ? Number(unitPolicy.yearly_entitlement || 0) : null, consumed, excess, balance, status: excess > 0 ? "Excess" : "OK" };
         });
         employeeRow.entitlement_status = employeeRow.has_missing_policy ? "Missing Policy" : employeeRow.has_excess ? "Excess" : "OK";
       });
@@ -95,12 +134,7 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
           ORDER BY CASE WHEN r.status = 'Pending' THEN 0 ELSE 1 END, r.created_at ASC, r.id ASC LIMIT 500
       `).map((row) => ({ ...row, category: classifyReviewReason(row.reason) }));
         
-      const missingPolicySuggestions = all(
-        `SELECT unit, item_name, COUNT(*) AS case_count, MIN(employee_code) AS sample_employee_code, MIN(employee_name) AS sample_employee_name
-         FROM review_queue
-         WHERE status = 'Pending' AND item_name IS NOT NULL AND TRIM(item_name) <> '' AND (allowed_qty IS NULL OR lower(reason) LIKE '%no entitlement policy%')
-         GROUP BY lower(unit), lower(item_name) ORDER BY unit, item_name`
-      );
+      const missingPolicySuggestions = getMissingAnnualPolicySuggestions({ all, scalar, normalizeLabel, isIgnoredIssueItemName });
       
       const reviewPendingCount = scalar("SELECT COUNT(*) FROM review_queue_items WHERE MAX(0, quantity - deducted_quantity - waived_quantity - held_quantity) > 0 AND COALESCE(is_active, 1) = 1");
       const reviewTotalCount = scalar("SELECT COUNT(*) FROM review_queue_items WHERE COALESCE(is_active, 1) = 1");
@@ -130,11 +164,12 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
           COALESCE(MAX(rq.unit), MAX(e.unit), '') AS unit,
           rqi.item_name,
           SUM(rqi.quantity) AS quantity,
-          COALESCE(MAX(up.item_cost), MAX(rq.item_cost), 0) AS rate,
-          SUM(CASE
-            WHEN rqi.decision = 'Deduct' THEN rqi.quantity * COALESCE(up.item_cost, rq.item_cost, 0)
-            ELSE 0
-          END) AS amount,
+          CASE WHEN rqi.decision = 'Deduct' AND MAX(sd.amount) IS NOT NULL AND SUM(rqi.quantity) > 0
+            THEN MAX(sd.amount) / SUM(rqi.quantity)
+            ELSE COALESCE(MAX(up.item_cost), MAX(rq.item_cost), 0) END AS rate,
+          CASE WHEN rqi.decision = 'Deduct'
+            THEN COALESCE(MAX(sd.amount), SUM(rqi.quantity * COALESCE(up.item_cost, rq.item_cost, 0)))
+            ELSE 0 END AS amount,
           COALESCE(MAX(rqi.remarks), MAX(rq.remarks), '') AS remarks,
           MAX(rq.issue_month) AS issue_month,
           MAX(rq.issue_year) AS issue_year,
@@ -147,6 +182,12 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         JOIN review_queue rq ON rq.id = rqi.review_queue_id
         LEFT JOIN employees e ON e.employee_code = rqi.employee_code
         LEFT JOIN unit_policies up ON lower(up.unit) = lower(COALESCE(rq.unit, e.unit, '')) AND lower(up.item_name) = lower(rqi.item_name)
+        LEFT JOIN (
+          SELECT d.review_id, d.amount
+          FROM salary_deductions d
+          JOIN (SELECT review_id, MAX(id) AS id FROM salary_deductions WHERE COALESCE(is_active, 1) = 1 GROUP BY review_id) latest
+            ON latest.id = d.id
+        ) sd ON sd.review_id = rq.id
         WHERE rqi.decision IN ('Deduct', 'Waive', 'Hold') AND COALESCE(rqi.is_active, 1) = 1
         GROUP BY rq.id, rqi.decision, rqi.item_name, rqi.employee_code
         ORDER BY MAX(COALESCE(rqi.reviewed_at, rq.decided_at, rq.created_at)) DESC, MIN(rqi.id) DESC
@@ -212,6 +253,13 @@ module.exports = ({ db, dbPath, scalar, all, save, audit, now, normalizeLabel, i
         dbPath,
         employees: all("SELECT * FROM employees ORDER BY updated_at DESC"),
         policies,
+        annualPolicies,
+        entitlementOptions: {
+          items: entitlementItems,
+          units: entitlementUnits,
+          annualFinancialYears: [...annualFinancialYears].filter((year) => Number.isInteger(year) && year >= 1900 && year <= 9998).sort((a, b) => b - a),
+        },
+        reviewQueueCalculationMode: reviewMode,
         items: all("SELECT *, CASE WHEN available_stock <= minimum_stock THEN 1 ELSE 0 END AS is_low_stock FROM uniform_items ORDER BY item_name, size"),
         stockMovements: all("SELECT * FROM stock_movements ORDER BY created_at DESC, id DESC LIMIT 100"),
         // Replace childDecisionStats with reviewDecisionStats
@@ -254,6 +302,12 @@ reviewDecisionStats: all("SELECT status as decision, COUNT(*) as count, SUM(exce
         },
         uniformIssueCount,
         uniformIssues: issueRows.slice(0, distributionLimit),
+        entitlementClassificationHistory: all(`
+          SELECT h.*, ui.employee_code, ui.employee_name, ui.unit, ui.item_name, ui.quantity, ui.issue_month, ui.issue_year, ui.issue_period_label
+          FROM entitlement_classification_history h
+          LEFT JOIN uniform_issues ui ON ui.id = h.uniform_issue_id
+          ORDER BY h.recorded_at DESC, h.id DESC
+        `),
         imports: all("SELECT * FROM imports ORDER BY imported_at DESC LIMIT 20"),
         reviews,
         reviewPendingCount,

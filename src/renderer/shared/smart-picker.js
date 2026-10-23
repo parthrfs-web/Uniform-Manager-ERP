@@ -45,6 +45,32 @@ class SmartPickerManager {
                     search: String(i.item_name || '').toLowerCase()
                 }));
             }
+            case 'entitlement-items': {
+                const list = (s.entitlementOptions && s.entitlementOptions.items) || [];
+                return [...new Set(list.map(value => String(value || '').trim()).filter(Boolean))].map(value => ({
+                    value,
+                    label: value,
+                    search: value.toLowerCase()
+                }));
+            }
+            case 'entitlement-units': {
+                const list = (s.entitlementOptions && s.entitlementOptions.units) || [];
+                return [...new Set(list.map(value => String(value || '').trim()).filter(Boolean))].map(value => ({
+                    value,
+                    label: value,
+                    search: value.toLowerCase()
+                }));
+            }
+            case 'annual-fys': {
+                const list = (s.entitlementOptions && s.entitlementOptions.annualFinancialYears) || [];
+                return [...new Set(list.map(Number).filter(year => Number.isInteger(year) && year >= 1900 && year <= 9998))]
+                    .sort((a, b) => b - a)
+                    .map(year => ({
+                        value: String(year),
+                        label: `FY ${year}-${String((year + 1) % 100).padStart(2, '0')}`,
+                        search: `fy ${year}-${String((year + 1) % 100).padStart(2, '0')} ${year}`
+                    }));
+            }
             case 'units': {
                 const units = new Set();
                 (s.employees || []).forEach(e => { if (e.unit) units.add(String(e.unit).trim()); });
@@ -144,12 +170,6 @@ class SmartPickerManager {
         // Load data strictly ONCE per focus event and cache it in memory
         this.currentData = this.loadData(type);
         
-        // FAIL SAFE: If no data can be loaded from DB, abort picker and let native typing work
-        if (!this.currentData || this.currentData.length === 0) {
-            this.close();
-            return;
-        }
-
         this.panel.style.display = 'block';
         this.positionPanel();
         this.renderList();
@@ -187,7 +207,9 @@ class SmartPickerManager {
 
         this.selectedIndex = this.items.length > 0 ? 0 : -1;
 
-        if (this.items.length === 0 && query !== '') {
+        if (!this.currentData.length) {
+            this.panel.innerHTML = `<div class="smart-picker-empty">${this.escapeHtml(this.activeInput.dataset.emptyMessage || 'No options available.')}</div>`;
+        } else if (this.items.length === 0 && query !== '') {
             // Display No Matches ONLY if data exists but filter yields zero records
             this.panel.innerHTML = `<div class="smart-picker-empty">No Matches Found</div>`;
         } else {

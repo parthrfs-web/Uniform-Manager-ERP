@@ -8,7 +8,7 @@ const views = {
   held_records: ["Held Records", "View, search, filter, and resolve uniform quantities currently on hold."],
   correction: ["Correction Centre", "Correct finalized review decisions safely."],
   correction_history: ["Correction History", "Audit log of all corrected review decisions."],
-  policies: ["Unit Entitlements", "Set allowed uniform quantity for each unit/company and item."],
+  policies: ["Entitlements", "Configure annual item limits and unit-specific entitlements."],
   reset: ["Data Management", "Backup, restore, or securely reset application data."],
   
   // Analytics
@@ -17,11 +17,14 @@ const views = {
   analytics_unit: ["Unit Wise Analytics", "Pinpoint distribution costs, trends, and top items by client branch."],
   analytics_item: ["Item Wise Analytics", "Track inventory item distribution lifecycles globally."],
   analytics_employee: ["Employee Wise Analytics", "Review long-term history and costs attached to specific personnel."],
-  analytics_payroll_summary: ["Payroll Deduction Summary", "Generate dynamic Excel exports for payroll deductions with live inventory columns."]
+  analytics_payroll_summary: ["Payroll Deduction Summary", "Generate dynamic Excel exports for payroll deductions with live inventory columns."],
+  analytics_detailed_report: ["Detailed Report", "Employee-wise finalized deductions with dynamic item quantities and rate details."]
 };
 
 function setView(name) {
   if (!views[name]) return;
+  if (name !== "analytics_detailed_report" && typeof window.closeDetailedReportEditor === "function") window.closeDetailedReportEditor();
+  if (name !== "policies" && typeof window.closeActualPriceImport === "function") window.closeActualPriceImport();
   
   document.querySelectorAll(".view").forEach((el) => {
       el.classList.toggle("active", el.id === name);
@@ -49,6 +52,12 @@ function setView(name) {
   }
   if (name === "held_records" && typeof window.loadHeldRecordsPage === "function") {
     window.loadHeldRecordsPage();
+  }
+  if (name === "review" && typeof window.refreshReviewQueue === "function") {
+    window.refreshReviewQueue();
+  }
+  if (name === "analytics_detailed_report" && typeof window.loadDetailedDeductionReportOptions === "function") {
+    window.loadDetailedDeductionReportOptions();
   }
 }
 

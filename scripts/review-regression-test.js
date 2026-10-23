@@ -29,7 +29,21 @@ async function main() {
     db.upsertPolicy({ unit, item_name: "Shirt", yearly_entitlement: 0, item_cost: 50 });
   }
   db.upsertPolicy({ unit: "TEST-3", item_name: "Pant", yearly_entitlement: 0, item_cost: 100 });
+  db.upsertAnnualPolicy({ item_name: "Pant", financial_year: 2025, allowed_quantity: 0 });
+  db.upsertAnnualPolicy({ item_name: "Shirt", financial_year: 2025, allowed_quantity: 0 });
+  db.upsertAnnualPolicy({ item_name: "Pant", financial_year: 2026, allowed_quantity: 0 });
+  db.upsertAnnualPolicy({ item_name: "Shirt", financial_year: 2026, allowed_quantity: 0 });
   db.recalculateReviews();
+  const entitlementOptions = db.getState({ distributionLimit: 1000 }).entitlementOptions;
+  if (!entitlementOptions.units.includes("PETRONET") || !entitlementOptions.units.includes("L&T")) throw new Error("Entitlement unit options omitted persisted distribution units.");
+  if (!entitlementOptions.annualFinancialYears.includes(2025) || !entitlementOptions.annualFinancialYears.includes(2026)) throw new Error("Annual financial-year options omitted policy years supported by persisted records.");
+  const optionsDb = await createDatabase(fs.mkdtempSync(path.join(os.tmpdir(), "uniform-entitlement-options-")));
+  optionsDb.upsertItem({ item_code: "PICKER-COAT", item_name: "Picker Coat", category: "Uniform", size: "M", cost: 75 });
+  optionsDb.upsertPolicy({ unit: "PICKER-UNIT", item_name: "Picker Coat", yearly_entitlement: 1, item_cost: 75 });
+  optionsDb.upsertAnnualPolicy({ item_name: "Picker Coat", financial_year: 2024, allowed_quantity: 2 });
+  const masterOptions = optionsDb.getState().entitlementOptions;
+  if (!masterOptions.items.includes("Picker Coat") || masterOptions.items.filter((item) => item.toLowerCase() === "picker coat").length !== 1) throw new Error("Entitlement item options did not provide distinct real item-master records.");
+  if (!masterOptions.units.includes("PICKER-UNIT") || !masterOptions.annualFinancialYears.includes(2024)) throw new Error("Entitlement options omitted persisted unit or annual-policy financial-year values.");
 
   const statusFixtures = [
     { code: "S001", unit: "STATUS-D4", issued: 4, allocation: { deduct: 4, waive: 0, hold: 0 }, expected: "Completed" },
@@ -101,11 +115,73 @@ async function main() {
   const persistedSessionAfterRestart = db.getReviewQueueStage2("S007").filter((row) => row.item_name === "Pant");
   if (persistedSessionAfterRestart.length !== 2 || persistedSessionAfterRestart.some((row) => Number(row.sum_deduct) !== 2 || Number(row.remaining_qty) !== 0)) throw new Error("Review session decisions did not persist after reopening the database.");
 
+  const annualBook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(annualBook, XLSX.utils.aoa_to_sheet([
+    ["Emp Code", "Name", "Father Name", "Unit", "Godown", "Month", "Annual Shirt", "Unconfigured Pant"],
+    ["A100", "Annual Allocation", "Father", "UNIT-A", "Store", "Apr 2025", 1, 1],
+    ["A100", "Annual Allocation", "Father", "UNIT-B", "Store", "May 2025", 2, 0],
+    ["A100", "Annual Allocation", "Father", "UNIT-C", "Store", "Jun 2025", 3, 0],
+    ["A200", "Separate Employee", "Father", "UNIT-A", "Store", "Apr 2025", 2, 0],
+  ]), "DISTRIBUTION");
+  const annualBookPath = path.join(tempDir, "annual-allocation-fixture.xlsx");
+  XLSX.writeFile(annualBook, annualBookPath);
+  importWorkbook(annualBookPath, db);
+  db.upsertItem({ item_code: "UNCONFIG-PANT", item_name: "Unconfigured Pant", category: "Uniform", size: "Standard", cost: 0 });
+  for (const unit of ["UNIT-A", "UNIT-B", "UNIT-C"]) db.upsertPolicy({ unit, item_name: "Annual Shirt", yearly_entitlement: 0, item_cost: 100 });
+  db.upsertAnnualPolicy({ item_name: "Annual Shirt", financial_year: 2025, allowed_quantity: 2 });
+  db.recalculateReviews();
+  const annualIssues = db.getState({ distributionLimit: 1000 }).uniformIssues.filter((row) => row.employee_code === "A100" && row.item_name === "Annual Shirt").sort((a, b) => a.id - b.id);
+  const annualAllocations = annualIssues.map((row) => [Number(row.entitlement_consumed), Number(row.excess_generated)]);
+  if (JSON.stringify(annualAllocations) !== JSON.stringify([[1, 0], [1, 1], [0, 3]])) throw new Error(`Annual entitlement did not allocate oldest-first across units: ${JSON.stringify(annualAllocations)}.`);
+  const annualPending = db.getState().reviews.filter((row) => row.employee_code === "A100" && row.item_name === "Annual Shirt" && Number(row.pending_qty) > 0);
+  if (annualPending.length !== 2 || annualPending.reduce((sum, row) => sum + Number(row.pending_qty), 0) !== 4) throw new Error(`Global annual allowance did not leave only the excess quantity pending across unit records: ${JSON.stringify(annualPending.map(({ unit, pending_qty, status }) => ({ unit, pending_qty, status })))}`);
+  const unconfiguredIssue = db.getState({ distributionLimit: 1000 }).uniformIssues.find((row) => row.employee_code === "A100" && row.item_name === "Unconfigured Pant");
+  if (!unconfiguredIssue || Number(unconfiguredIssue.entitlement_consumed) !== 0 || Number(unconfiguredIssue.excess_generated) !== 1) throw new Error("Missing annual policy did not classify the issue as excess.");
+  const missingAnnualPolicy = db.getState().annualPolicies.find((row) => row.item_name === "Unconfigured Pant" && Number(row.financial_year) === 2025 && Number(row.allowed_quantity) === 0);
+  const annualSuggestionOptions = db.getState().entitlementOptions;
+  if (!missingAnnualPolicy || !annualSuggestionOptions.items.includes(missingAnnualPolicy.item_name) || !annualSuggestionOptions.annualFinancialYears.includes(Number(missingAnnualPolicy.financial_year))) throw new Error("Imported item was not automatically provisioned as a selectable annual policy for its financial year.");
+  const annualHistory = db.getReviewQueueStage2("A100").find((row) => row.item_name === "Annual Shirt").history_items;
+  if (!annualHistory.some((row) => String(row.remarks).includes("Within Entitlement")) || !annualHistory.some((row) => String(row.remarks).includes("Excess"))) throw new Error("Annual entitlement classifications were not exposed in review history.");
+  const separateEmployeeIssue = db.getState({ distributionLimit: 1000 }).uniformIssues.find((row) => row.employee_code === "A200" && row.item_name === "Annual Shirt");
+  if (!separateEmployeeIssue || Number(separateEmployeeIssue.entitlement_consumed) !== 2 || Number(separateEmployeeIssue.excess_generated) !== 0) throw new Error("Annual item limit was not independently applied per employee.");
+  if (db.getState().reviewQueueCalculationMode !== "item_annual") throw new Error("Fresh database did not default to Item-wise Annual mode.");
+  db.upsertPolicy({ unit: "UNIT-A", item_name: "Annual Shirt", yearly_entitlement: 2, item_cost: 100 });
+  db.upsertPolicy({ unit: "UNIT-B", item_name: "Annual Shirt", yearly_entitlement: 0, item_cost: 100 });
+  db.upsertPolicy({ unit: "UNIT-C", item_name: "Annual Shirt", yearly_entitlement: 0, item_cost: 100 });
+  const annualUnitBReview = db.getState().reviews.find((row) => row.employee_code === "A100" && row.unit === "UNIT-B" && row.item_name === "Annual Shirt");
+  if (!annualUnitBReview) throw new Error("Annual mode did not create the expected unit-specific pending review.");
+  db.updateReview({ id: annualUnitBReview.id, status: "Completed", approved_by: "Mode Test", reason: "Mode change preservation", quantity_decisions: { deduct: 1, waive: 0, hold: 0 } });
+  db.setReviewQueueCalculationMode("unit_wise");
+  db.recalculateReviews();
+  let modeState = db.getState();
+  let unitPending = modeState.reviews.filter((row) => row.employee_code === "A100" && row.item_name === "Annual Shirt").reduce((sum, row) => sum + Number(row.pending_qty || 0), 0);
+  if (modeState.reviewQueueCalculationMode !== "unit_wise" || unitPending !== 4) throw new Error(`Unit-wise mode did not use its existing per-unit allowance semantics (pending ${unitPending}).`);
+  if (!modeState.entitlementClassificationHistory.some((row) => row.employee_code === "A100" && row.unit === "UNIT-B" && row.calculation_mode === "item_annual" && Number(row.entitlement_consumed) === 1 && Number(row.excess_generated) === 1)) throw new Error("Switching modes did not preserve the previous annual classification history.");
+  const previousModeHistory = db.getReviewQueueStage2("A100").find((row) => row.item_name === "Annual Shirt")?.history_items || [];
+  if (!previousModeHistory.some((row) => String(row.remarks).includes("Previous Item-wise Annual"))) throw new Error("Previous mode classifications were not exposed in review history.");
+  const retainedDeduction = modeState.salaryDeductions.find((row) => row.review_id === annualUnitBReview.id && row.is_active);
+  if (!retainedDeduction || Number(retainedDeduction.amount) !== 100) throw new Error("Switching modes changed or duplicated a finalized payroll deduction.");
+  db.setReviewQueueCalculationMode("combined");
+  db.recalculateReviews();
+  modeState = db.getState();
+  const combinedRows = modeState.reviews.filter((row) => row.employee_code === "A100" && row.item_name === "Annual Shirt");
+  const combinedPending = combinedRows.reduce((sum, row) => sum + Number(row.pending_qty || 0), 0);
+  if (modeState.reviewQueueCalculationMode !== "combined" || combinedPending !== 4 || combinedRows.filter((row) => Number(row.pending_qty || 0) > 0).length !== 2) throw new Error("Combined mode added overlapping annual/unit excess or generated duplicate unit reviews.");
+  db.setReviewQueueCalculationMode("item_annual");
+  db.recalculateReviews();
+  modeState = db.getState();
+  const annualAfterSwitch = modeState.reviews.filter((row) => row.employee_code === "A100" && row.item_name === "Annual Shirt").reduce((sum, row) => sum + Number(row.pending_qty || 0), 0);
+  if (annualAfterSwitch !== 3 || modeState.salaryDeductions.filter((row) => row.review_id === annualUnitBReview.id && row.is_active).length !== 1) throw new Error("Switching back to annual mode did not preserve finalized decisions without duplicate deductions.");
+  db = await createDatabase(tempDir);
+  const persistedAnnualState = db.getState({ distributionLimit: 1000 });
+  const persistedAnnualIssue = persistedAnnualState.uniformIssues.find((row) => row.employee_code === "A100" && row.item_name === "Annual Shirt" && row.unit === "UNIT-B");
+  if (!persistedAnnualState.annualPolicies.some((policy) => policy.item_name === "Annual Shirt" && Number(policy.financial_year) === 2025 && Number(policy.allowed_quantity) === 2) || !persistedAnnualIssue || Number(persistedAnnualIssue.excess_generated) !== 1 || persistedAnnualState.reviewQueueCalculationMode !== "item_annual") throw new Error("Annual policy allocation or selected calculation mode did not persist after reopening the database.");
+
   let reviews = db.getReviewQueueStage2("R001").filter((row) => row.item_name === "Pant");
   const unitQty = new Map(reviews.map((row) => [row.unit, [Number(row.issued_qty), Number(row.allowed_qty), Number(row.excess_qty)]]));
   for (const unit of units) {
     const values = unitQty.get(unit);
-    if (!values || values[0] !== 2 || values[1] !== 0 || values[2] !== 2) throw new Error(`Incorrect review values for ${unit}.`);
+    if (!values || values[0] !== 8 || values[1] !== 0 || values[2] !== 2) throw new Error(`Incorrect annual-scope review values for ${unit}.`);
   }
   const selected = reviews.find((row) => row.unit === "AMNS-PORT");
   if (!selected || !selected.child_items?.length) throw new Error("AMNS-PORT review did not retain transaction child IDs.");
@@ -174,10 +250,10 @@ async function main() {
 
   const shirtBefore = state.reviews.find((row) => row.employee_code === "R001" && row.item_name === "Shirt" && row.unit === "AMNS-PORT");
   if (!shirtBefore || Number(shirtBefore.excess_qty) !== 2) throw new Error("Shirt fixture did not start with expected excess.");
-  db.upsertPolicy({ unit: "AMNS-PORT", item_name: "Shirt", yearly_entitlement: 1, item_cost: 50 });
+  db.upsertAnnualPolicy({ item_name: "Shirt", financial_year: 2025, allowed_quantity: 1 });
   db.recalculateReviews();
   const shirtAfter = db.getState().reviews.find((row) => row.employee_code === "R001" && row.item_name === "Shirt" && row.unit === "AMNS-PORT");
-  if (!shirtAfter || Number(shirtAfter.allowed_qty) !== 1 || Number(shirtAfter.excess_qty) !== 1) throw new Error("Recalculation did not use updated AMNS-PORT Shirt entitlement.");
+  if (!shirtAfter || Number(shirtAfter.allowed_qty) !== 1 || Number(shirtAfter.excess_qty) !== 1) throw new Error(`Recalculation did not use updated item-wide annual Shirt entitlement: ${JSON.stringify(shirtAfter && { allowed_qty: shirtAfter.allowed_qty, excess_qty: shirtAfter.excess_qty, pending_qty: shirtAfter.pending_qty, status: shirtAfter.status })}.`);
 
   const countBeforeSecondRecalc = db.getState().reviews.length;
   db.recalculateReviews();
@@ -192,6 +268,43 @@ async function main() {
   if (state.reviews.find((row) => row.id === selected.id)?.status !== "Completed") throw new Error("Saved decision did not persist after reopening the database.");
   if (state.reviewDecisions.filter((row) => row.review_id === selected.id && row.is_active).length !== 1) throw new Error("Review decision was duplicated.");
 
+  // Recalculation must preserve a finalized child beside another still-pending child.
+  const splitBook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(splitBook, XLSX.utils.aoa_to_sheet([
+    ["Emp Code", "Name", "Father Name", "Unit", "Godown", "Month", "Pant"],
+    ["R010", "Mixed Recalculation", "Father", "RECALC-MIX", "Store", "Jan 2026", 1],
+    ["R010", "Mixed Recalculation", "Father", "RECALC-MIX", "Store", "Feb 2026", 1],
+  ]), "DISTRIBUTION");
+  const splitPath = path.join(tempDir, "mixed-recalculation-fixture.xlsx");
+  XLSX.writeFile(splitBook, splitPath);
+  importWorkbook(splitPath, db);
+  db.upsertPolicy({ unit: "RECALC-MIX", item_name: "Pant", yearly_entitlement: 0, item_cost: 100 });
+  db.recalculateReviews();
+  let mixedParent = db.getReviewQueueStage2("R010").find((row) => row.unit === "RECALC-MIX" && row.item_name === "Pant");
+  if (!mixedParent || mixedParent.child_items.length !== 2) throw new Error("Mixed recalculation fixture did not group both distribution records.");
+  const [finalizedChild, pendingChild] = mixedParent.child_items;
+  db.updateReview({
+    id: mixedParent.id,
+    status: "Completed",
+    approved_by: "Regression Test",
+    reason: "Partial parent decision",
+    issue_decisions: [
+      { id: finalizedChild.id, decision: "Deduct" },
+      { id: pendingChild.id, decision: "Pending" },
+    ],
+  });
+  db.recalculateReviews();
+  mixedParent = db.getReviewQueueStage2("R010").find((row) => row.id === mixedParent.id);
+  const mixedActive = mixedParent.child_items.filter((row) => Number(row.is_active ?? 1) === 1);
+  const preservedFinalized = mixedActive.find((row) => Number(row.id) === Number(finalizedChild.id));
+  const regeneratedPending = mixedActive.filter((row) => row.decision === "Pending");
+  if (!preservedFinalized || Number(preservedFinalized.deducted_quantity) !== 1 || regeneratedPending.length !== 1 || Number(regeneratedPending[0].quantity) !== 1) throw new Error(`Recalculation did not preserve finalized quantities while replacing only the undecided remainder: ${JSON.stringify(mixedParent.child_items.map((row) => ({ id: row.id, quantity: row.quantity, decision: row.decision, deduct: row.deducted_quantity })))}`);
+  if (mixedParent.status !== "Pending" || Number(mixedParent.remaining_qty) !== 1) throw new Error("Mixed parent status or remaining quantity changed after recalculation.");
+  if (db.getState().salaryDeductions.filter((row) => row.review_id === mixedParent.id && row.is_active).length !== 1) throw new Error("Recalculation duplicated or removed the finalized payroll deduction.");
+  db.recalculateReviews();
+  mixedParent = db.getReviewQueueStage2("R010").find((row) => row.id === mixedParent.id);
+  if (mixedParent.child_items.filter((row) => row.decision === "Pending").length !== 1) throw new Error("Repeated recalculation duplicated the active pending quantity.");
+
   const legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), "uniform-review-legacy-migration-"));
   const SQL = await initSqlJs();
   const legacyDb = new SQL.Database();
@@ -204,7 +317,58 @@ async function main() {
   const migratedDb = await createDatabase(legacyDir);
   const migrated = migratedDb.getReviewQueueStage2("L001").find((row) => row.id === 1);
   if (!migrated || Number(migrated.sum_deduct) !== 2 || Number(migrated.child_items[0].deducted_quantity) !== 2) throw new Error("Backward-compatible migration did not preserve and backfill a historical deduction.");
-  console.log("Review regression tests passed (validation, mixed allocations, scoped units, payroll/waiver/correction reporting, recalculation, persistence, legacy migration).");
+
+  const monthlyDir = fs.mkdtempSync(path.join(os.tmpdir(), "uniform-monthly-hold-regression-"));
+  const monthlyBook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(monthlyBook, XLSX.utils.aoa_to_sheet([
+    ["Emp Code", "Name", "Father Name", "Unit", "Godown", "Month", "Pant"],
+    ["H001", "Monthly Hold", "Father", "HOLD-EARLY", "Store", "Jan 2026", 1],
+    ["H001", "Monthly Hold", "Father", "HOLD-DUE", "Store", "Jan 2026", 1],
+  ]), "DISTRIBUTION");
+  const monthlyPath = path.join(monthlyDir, "monthly-hold-fixture.xlsx");
+  XLSX.writeFile(monthlyBook, monthlyPath);
+  let monthlyDb = await createDatabase(monthlyDir);
+  importWorkbook(monthlyPath, monthlyDb);
+  for (const unit of ["HOLD-EARLY", "HOLD-DUE"]) monthlyDb.upsertPolicy({ unit, item_name: "Pant", yearly_entitlement: 0, item_cost: 125 });
+  monthlyDb.recalculateReviews();
+  const monthlyReviews = monthlyDb.getReviewQueueStage2("H001").filter((row) => ["HOLD-EARLY", "HOLD-DUE"].includes(row.unit));
+  if (monthlyReviews.length !== 2) throw new Error("Monthly hold fixture did not create one review per unit.");
+  for (const review of monthlyReviews) monthlyDb.updateReview({ id: review.id, status: "Completed", approved_by: "Regression Test", reason: "Initial temporary hold", quantity_decisions: { deduct: 0, waive: 0, hold: 1 } });
+  let heldRows = monthlyDb.getHeldRecords().filter((row) => row.employee_code === "H001");
+  if (heldRows.length !== 2 || heldRows.some((row) => Number(row.held_quantity) !== 1)) throw new Error("Initial hold records or outstanding held quantities were not persisted by unit.");
+  const early = heldRows.find((row) => row.unit === "HOLD-EARLY");
+  const dueLater = heldRows.find((row) => row.unit === "HOLD-DUE");
+  monthlyDb.reviewHeldNow({ reviewId: early.review_id, itemId: early.item_id, quantity: 1, employeeCode: "H001", actor: "Regression Test" });
+  let earlyReview = monthlyDb.getReviewQueueStage2("H001").find((row) => row.id === early.review_id);
+  const earlyChild = earlyReview.child_items.find((item) => item.id === early.item_id);
+  if (Number(earlyReview.sum_hold) !== 0 || Number(earlyReview.remaining_qty) !== 1 || !earlyChild.previously_held) throw new Error("Review Now did not reopen exactly the selected held quantity with its history intact.");
+  monthlyDb.updateReview({ id: early.review_id, status: "Completed", approved_by: "Regression Test", reason: "Early hold review", issue_decisions: [{ id: early.item_id, quantity: 1, decision: "Pending", allocations: { Deduct: 0, Waive: 1, Hold: 0 } }] });
+  earlyReview = monthlyDb.getReviewQueueStage2("H001").find((row) => row.id === early.review_id);
+  if (Number(earlyReview.sum_waive) !== 1 || earlyReview.status !== "Completed" || monthlyDb.getHeldRecords().some((row) => row.item_id === early.item_id)) throw new Error("Early review did not resolve the selected held quantity as a waiver exactly once.");
+  const otherUnitBefore = monthlyDb.getHeldRecords().find((row) => row.item_id === dueLater.item_id);
+  if (!otherUnitBefore || Number(otherUnitBefore.held_quantity) !== 1) throw new Error("Review Now changed a different unit's held record.");
+  monthlyDb.resolveHeldQuantity({ reviewId: dueLater.review_id, itemId: dueLater.item_id, quantity: 1, decision: "Hold", reason: "Renew temporary hold", resolvedBy: "Regression Test" });
+  const renewed = monthlyDb.getHeldRecords().find((row) => row.item_id === dueLater.item_id);
+  if (!renewed || Number(renewed.held_quantity) !== 1) throw new Error("Hold Again did not preserve the held quantity.");
+  monthlyDb.save();
+  const cycleDb = new SQL.Database(fs.readFileSync(monthlyDb.dbPath));
+  cycleDb.run("UPDATE review_hold_events SET due_month = 1, due_year = 2000 WHERE event_type IN ('Held', 'Held Again')");
+  fs.writeFileSync(monthlyDb.dbPath, Buffer.from(cycleDb.export()));
+  monthlyDb = await createDatabase(monthlyDir);
+  const dueReview = monthlyDb.getReviewQueueStage2("H001").find((row) => row.id === dueLater.review_id);
+  const dueChild = dueReview.child_items.find((item) => item.id === dueLater.item_id);
+  if (Number(dueReview.sum_hold) !== 0 || Number(dueReview.remaining_qty) !== 1 || !dueChild.previously_held || dueReview.status !== "Pending") throw new Error("Monthly cycle did not reopen the renewed held quantity for review.");
+  if (monthlyDb.getHeldRecords().some((row) => row.item_id === dueLater.item_id)) throw new Error("A due held record remained on the active Held Records page after monthly release.");
+  const issueCountBeforeRecalc = monthlyDb.getState().uniformIssues.filter((row) => row.employee_code === "H001").length;
+  monthlyDb.recalculateReviews();
+  monthlyDb.recalculateReviews();
+  const dueAfterRepeatedRecalc = monthlyDb.getReviewQueueStage2("H001").find((row) => row.id === dueLater.review_id);
+  if (Number(dueAfterRepeatedRecalc.remaining_qty) !== 1 || dueAfterRepeatedRecalc.child_items.filter((row) => row.previously_held).length !== 1) throw new Error("Repeated recalculation duplicated or lost the monthly re-review quantity.");
+  if (monthlyDb.getState().uniformIssues.filter((row) => row.employee_code === "H001").length !== issueCountBeforeRecalc) throw new Error("Monthly hold re-review created a duplicate distribution record.");
+  const restarted = await createDatabase(monthlyDir);
+  const persistedMonthly = restarted.getReviewQueueStage2("H001").find((row) => row.id === dueLater.review_id);
+  if (Number(persistedMonthly.remaining_qty) !== 1 || Number(persistedMonthly.sum_waive) !== 0 || persistedMonthly.status !== "Pending") throw new Error("Monthly re-review state did not persist after restart.");
+  console.log("Review regression tests passed (validation, mixed allocations, scoped units, payroll/waiver/correction reporting, recalculation, persistence, legacy migration, early hold review, Hold Again, monthly reopen idempotence).");
 }
 
 main().catch((error) => {

@@ -171,6 +171,7 @@ document.getElementById("commitImportBtn")?.addEventListener("click", async () =
     const result = await window.uniformManager.commitImport(currentPreviewData);
     
     state = await window.uniformManager.getState({ distributionLimit });
+    if (typeof window.refreshActualPriceData === 'function') await window.refreshActualPriceData();
     
     stopProgress();
     render();

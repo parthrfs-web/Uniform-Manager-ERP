@@ -212,6 +212,7 @@ window.updateIndividualReviewSummary = function(reviewId) {
 window.closeIndividualReviewModal = function() {
     const wasOpen = document.getElementById("individualReviewModal").classList.contains("show");
     pendingReviewDecision = null;
+    reviewNowTarget = null;
     document.getElementById("individualReviewModal").classList.remove("show");
     if (wasOpen && currentEmpData && selectedReviewEmployee) {
         document.getElementById("reviewStage1").style.display = "none";
@@ -237,13 +238,27 @@ async function refreshReviewEmployeeSummary() {
 
 window.openItemReviewModal = function(...reviewIds) {
     const requestedIds = reviewIds.map(String);
-    const reviews = (currentStage2Items || []).filter((review) => requestedIds.includes(String(review.id)) && Number(review.remaining_qty ?? review.excess_qty ?? 0) > 0);
+    let reviews = (currentStage2Items || []).filter((review) => requestedIds.includes(String(review.id)) && Number(review.remaining_qty ?? review.excess_qty ?? 0) > 0);
+    const target = reviewNowTarget;
+    if (target && requestedIds.includes(String(target.reviewId))) {
+        reviews = reviews.filter((review) => String(review.id) === String(target.reviewId)).map((review) => {
+            const child = (review.child_items || []).find((item) => String(item.id) === String(target.itemId));
+            if (!child) return null;
+            return { ...review, remaining_qty: Number(target.quantity), child_items: [{ ...child, remaining_quantity: Number(target.quantity), held_quantity: 0 }] };
+        }).filter(Boolean);
+    }
     if (!reviews.length) return;
 
-    pendingReviewDecision = { reviews, reviewIds: requestedIds };
+    pendingReviewDecision = { reviews, reviewIds: requestedIds, target: target || null };
     const firstReview = reviews[0];
-    const issuedQty = reviews.reduce((sum, review) => sum + Number(review.issued_qty || 0), 0);
-    const allowedQty = reviews.some((review) => review.allowed_qty === null) ? 'No Policy' : reviews.reduce((sum, review) => sum + Number(review.allowed_qty || 0), 0);
+    const uniqueScopes = new Map();
+    reviews.forEach((review) => {
+        const key = review.calculation_scope_key || `${String(review.item_name || '').toLowerCase()}|${review.financial_year || review.issue_year || ''}|${String(review.unit || '').toLowerCase()}`;
+        if (!uniqueScopes.has(key)) uniqueScopes.set(key, review);
+    });
+    const scopedReviews = [...uniqueScopes.values()];
+    const issuedQty = scopedReviews.reduce((sum, review) => sum + Number(review.issued_qty || 0), 0);
+    const allowedQty = scopedReviews.some((review) => review.allowed_qty === null) ? 'No Policy' : scopedReviews.reduce((sum, review) => sum + Number(review.allowed_qty || 0), 0);
     const excessQty = reviews.reduce((sum, review) => sum + Number(review.excess_qty || 0), 0);
 
     document.getElementById("indRevTitle").textContent = "Review Excess Transactions";
@@ -255,7 +270,13 @@ window.openItemReviewModal = function(...reviewIds) {
     `;
     
     const monthNames = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const historyHtml = (firstReview.history_items || []).map(hist => {
+    const historyItems = [...new Map(reviews.flatMap((review) => review.history_items || []).map((hist) => [String(hist.id), hist])).values()];
+    const historyTitle = document.getElementById("indRevHistoryTitle");
+    if (historyTitle) {
+        const years = [...new Set(reviews.map((review) => Number(review.financial_year)).filter(Number.isInteger))].sort((a, b) => a - b);
+        historyTitle.textContent = years.length ? `Distribution History — FY ${years.map((year) => `${year}–${String(year + 1).slice(-2)}`).join(', FY ')}` : 'Distribution History';
+    }
+    const historyHtml = historyItems.map(hist => {
         const monthStr = hist.issue_month ? monthNames[Number(hist.issue_month)] : '-';
         return `
             <tr style="background: #111821;">
@@ -268,7 +289,7 @@ window.openItemReviewModal = function(...reviewIds) {
         `;
     }).join('');
     
-    document.getElementById("indRevHistoryRows").innerHTML = historyHtml || '<tr><td colspan="5" style="padding: 10px; border: 1px solid var(--line); color: var(--muted); text-align: center;">No history found for the previous two years.</td></tr>';
+    document.getElementById("indRevHistoryRows").innerHTML = historyHtml || '<tr><td colspan="5" style="padding: 10px; border: 1px solid var(--line); color: var(--muted); text-align: center;">No distribution history found for this calculation scope.</td></tr>';
 
     document.getElementById("indRevTransactions").innerHTML = reviews.map((review) => {
         const unitName = review.unit || 'Unknown Unit';
@@ -279,7 +300,8 @@ window.openItemReviewModal = function(...reviewIds) {
         const distributionDates = [...new Set((review.child_items || []).map((child) => child.issue_date).filter(Boolean).map((date) => String(date).split('T')[0]))];
         const previouslyDeducted = Number(review.sum_deduct || 0);
         const previouslyWaived = Number(review.sum_waive || 0);
-        const previouslyHeld = Number(review.sum_hold || 0);
+        const previouslyHeld = target ? 0 : Number(review.sum_hold || 0);
+        const wasHeld = (review.child_items || []).some((child) => child.previously_held && Number(child.remaining_quantity || 0) > 0);
         const remainingQty = Math.max(0, Number(review.remaining_qty ?? (excess - previouslyDeducted - previouslyWaived - previouslyHeld)));
 
         const quickActions = remainingQty === 1
@@ -294,7 +316,7 @@ window.openItemReviewModal = function(...reviewIds) {
         return `
             <div class="panel flush" style="margin-bottom: 16px;">
                 <div style="padding: 16px; border-bottom: 1px solid var(--line); background: #131922; display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-weight: bold; font-size: 15px; color: var(--ink);">${escapeHtml(unitName)} — ${escapeHtml(itemName)}</span>
+                    <span style="font-weight: bold; font-size: 15px; color: var(--ink);">${target || wasHeld ? 'Previously Held — Review Required · ' : ''}${escapeHtml(unitName)} — ${escapeHtml(itemName)}</span>
                     ${distributionDates.length ? `<span style="color: var(--muted); font-size: 12px;">Distribution${distributionDates.length > 1 ? ' dates' : ' date'}: ${escapeHtml(distributionDates.join(', '))}</span>` : ''}
                 </div>
                 <div style="padding: 16px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; font-size: 13px; background: var(--panel);">
@@ -439,23 +461,60 @@ window.saveItemReviewDecision = async function(reviewId, quickDecision = null) {
     }
 
     try {
-        await window.uniformManager.updateReview({
+        const target = pendingReviewDecision.target;
+        const payload = {
             id: review.id,
             approved_by: document.getElementById("indRevApprovedBy").value,
             reason: document.getElementById("indRevGeneralReason").value,
-            quantity_decisions: Object.fromEntries(Object.entries(quantities).map(([kind, value]) => [kind, Number(value)])),
             remarks: document.getElementById(`group_remarks_${review.id}`)?.value || '',
             status: 'Completed',
-        });
+        };
+        if (target) {
+            payload.issue_decisions = [{ id: Number(target.itemId), quantity: remaining, decision: 'Pending', allocations: { Deduct: Number(quantities.deduct), Waive: Number(quantities.waive), Hold: Number(quantities.hold) } }];
+        } else {
+            payload.quantity_decisions = Object.fromEntries(Object.entries(quantities).map(([kind, value]) => [kind, Number(value)]));
+        }
+        await window.uniformManager.updateReview(payload);
         state = await window.uniformManager.getState({ distributionLimit });
         if (typeof renderDeductions === "function") renderDeductions();
         const sessionIds = pendingReviewDecision.reviewIds || pendingReviewDecision.reviews.map((row) => String(row.id));
         await loadReviewStage2(currentEmpData, { preserveModal: true });
-        pendingReviewDecision = { reviews: [], reviewIds: sessionIds };
-        renderReviewSession();
+        if (target) {
+            reviewNowTarget = { ...target, completed: true };
+            pendingReviewDecision = { reviews: [], reviewIds: sessionIds, target: reviewNowTarget };
+            document.getElementById("indRevTransactions").innerHTML = '<div class="panel" style="padding:18px;color:var(--green);font-weight:600;">The selected held quantity has been processed. Close this window when ready.</div>';
+            document.getElementById("indRevCalculatedTotals").innerHTML = '<div class="text-green" style="font-weight:600;">Selected held quantity reviewed and saved.</div>';
+            document.getElementById("indRevSaveMsg").textContent = 'This selected held quantity is complete. Close the window when ready.';
+            document.getElementById("indRevSaveBtn").style.display = 'none';
+            await window.loadHeldRecordsPage?.();
+        } else {
+            pendingReviewDecision = { reviews: [], reviewIds: sessionIds };
+            renderReviewSession();
+        }
         toast("Review decision saved.");
     } catch (error) {
         showImportError(error.message || "Review decision failed.");
+    }
+};
+
+window.openHeldQuantityReview = async function({ reviewId, itemId, quantity, employeeCode }) {
+    try {
+        startProgress();
+        const stage1 = await window.uniformManager.getReviewQueueStage1();
+        const summary = stage1.find((item) => String(item.employee_code) === String(employeeCode));
+        const rows = await window.uniformManager.getReviewQueueStage2(employeeCode);
+        const review = rows.find((item) => String(item.id) === String(reviewId));
+        const child = review?.child_items?.find((item) => String(item.id) === String(itemId));
+        if (!review || !child || Number(child.held_quantity || 0) < Number(quantity)) throw new Error('Held quantity changed. Refresh Held Records and try again.');
+        const emp = summary || { employee_code: review.employee_code, employee_name: review.employee_name, current_unit: review.unit, payroll_month: review.issue_period_label, pending_item_count: 1, estimated_deduction: 0 };
+        await loadReviewStage2(emp);
+        reviewNowTarget = { reviewId: Number(reviewId), itemId: Number(itemId), quantity: Number(quantity) };
+        window.setView?.('review');
+        window.openItemReviewModal(Number(reviewId));
+    } catch (error) {
+        showImportError(error.message || 'Unable to open the held quantity for review.');
+    } finally {
+        stopProgress();
     }
 };
 
@@ -621,6 +680,12 @@ async function loadReviewStage2(emp, { preserveModal = false } = {}) {
 
   try {
     currentStage2Items = await window.uniformManager.getReviewQueueStage2(emp.employee_code);
+    const refreshedSummary = await window.uniformManager.getReviewQueueStage1();
+    const refreshedEmployee = refreshedSummary.find((row) => String(row.employee_code) === String(emp.employee_code));
+    currentEmpData = refreshedEmployee || { ...emp, pending_item_count: 0, estimated_deduction: 0 };
+    emp = currentEmpData;
+    document.getElementById("stg2Count").textContent = text(emp.pending_item_count || 0);
+    document.getElementById("stg2Amount").textContent = `₹${Number(emp.estimated_deduction || 0).toFixed(2)}`;
     
     let counts = { Pending: 0, Deducted: 0, Waived: 0, Held: 0, Completed: 0 };
     let amounts = { Pending: 0, Deducted: 0, Waived: 0, Held: 0, Completed: 0 };
@@ -646,6 +711,12 @@ async function loadReviewStage2(emp, { preserveModal = false } = {}) {
 
     const groupedReviewItems = Array.from(itemGroups.values()).map((rows) => {
       const firstRow = rows[0];
+      const uniqueScopes = new Map();
+      rows.forEach((row) => {
+        const key = row.calculation_scope_key || `${String(row.item_name || '').toLowerCase()}|${row.financial_year || row.issue_year || ''}|${String(row.unit || '').toLowerCase()}`;
+        if (!uniqueScopes.has(key)) uniqueScopes.set(key, row);
+      });
+      const scopeRows = [...uniqueScopes.values()];
       const pendingRows = rows.filter((row) => Math.max(0, Number(row.remaining_qty ?? row.excess_qty ?? 0)) > 0);
       const heldQty = rows.reduce((sum, row) => sum + Number(row.sum_hold || 0), 0);
       const remainingQty = rows.reduce((sum, row) => sum + Math.max(0, Number(row.remaining_qty ?? row.excess_qty ?? 0)), 0);
@@ -657,8 +728,8 @@ async function loadReviewStage2(emp, { preserveModal = false } = {}) {
       return {
         ...firstRow,
         status: remainingQty > 0 ? "Pending" : (heldQty > 0 ? "Held" : "Completed"),
-        issued_qty: rows.reduce((sum, row) => sum + Number(row.issued_qty || 0), 0),
-        allowed_qty: rows.some((row) => row.allowed_qty === null) ? null : rows.reduce((sum, row) => sum + Number(row.allowed_qty || 0), 0),
+        issued_qty: scopeRows.reduce((sum, row) => sum + Number(row.issued_qty || 0), 0),
+        allowed_qty: scopeRows.some((row) => row.allowed_qty === null) ? null : scopeRows.reduce((sum, row) => sum + Number(row.allowed_qty || 0), 0),
         excess_qty: rows.reduce((sum, row) => sum + Number(row.excess_qty || 0), 0),
         sum_deduct: rows.reduce((sum, row) => sum + Number(row.sum_deduct || 0), 0),
         sum_waive: rows.reduce((sum, row) => sum + Number(row.sum_waive || 0), 0),
@@ -759,7 +830,7 @@ async function renderReviews() {
       empData = { ...currentEmpData, pending_item_count: 0, estimated_deduction: 0 };
     }
     if (empData) {
-      loadReviewStage2(empData);
+      loadReviewStage2(empData, { preserveModal: document.getElementById("individualReviewModal")?.classList.contains("show") });
     } else {
       selectedReviewEmployee = null;
       currentEmpData = null;
@@ -771,6 +842,7 @@ async function renderReviews() {
     renderReviewStage1();
   }
 }
+window.refreshReviewQueue = renderReviews;
 
 document.getElementById("backToStage1Btn")?.addEventListener("click", () => {
   selectedReviewEmployee = null;

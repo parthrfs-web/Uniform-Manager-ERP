@@ -1,11 +1,14 @@
 const fs = require("fs");
+const XLSX = require("xlsx");
 const initSqlJs = require("sql.js");
 const path = require("path");
 const { fork } = require("child_process");
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { createDatabase } = require("./database/database");
 const { exportToExcel, exportAnalyticsExcel, exportDecisionRegisterPdf } = require('./services/export-engine');
+const { applyBulkPolicyChange, persistThenRecalculate } = require('./services/review-queue-updates');
 const { buildValidatedImport } = require("./import/smart-importer");
+const { parseActualPriceFile } = require("./services/actual-price-import");
 
 let db;
 let pendingImportCache = null; 
@@ -146,6 +149,7 @@ ipcMain.handle("app:commitImport", async (event) => {
       await yieldEventLoop();
 
       if (safeData.summary.importHash && typeof db.hasImportHash === 'function' && db.hasImportHash(safeData.summary.importHash)) {
+        if (typeof db.syncDuplicateImportDetectedItems === 'function') db.syncDuplicateImportDetectedItems(safeData.summary.importHash, safeData.summary.detectedItems || []);
         safeData.summary.duplicate = true; 
         safeData.summary.inserted = 0; 
         safeData.summary.updated = 0; 
@@ -303,9 +307,16 @@ ipcMain.handle("app:restoreDatabase", async () => handleSafe(async () => {
 }));
 
 ipcMain.handle("app:getReviewQueueStage1", () => handleSafe(() => db.getReviewQueueStage1()));
-ipcMain.handle("app:getReviewQueueStage2", (_event, code) => handleSafe(() => db.getReviewQueueStage2(code)));
+ipcMain.handle("app:getReviewQueueStage2", async (_event, code) => handleSafe(async () => {
+  // Refresh just this employee against current policies before returning the
+  // review cards and modal data. This updates stale snapshots without running
+  // a full-database recalculation on every review session.
+  await db.recalculateReviewsForEmployee(code);
+  return db.getReviewQueueStage2(code);
+}));
 ipcMain.handle("app:getReviewQueueStage3", (_event, req) => handleSafe(() => db.getReviewQueueStage3(req)));
 ipcMain.handle("app:getHeldRecords", () => handleSafe(() => db.getHeldRecords()));
+ipcMain.handle("app:reviewHeldNow", (_event, payload) => handleSafe(() => db.reviewHeldNow(payload)));
 
 ipcMain.handle("app:recalculateReviews", async (event) => handleSafe(async () => {
    const generated = await db.recalculateReviews(buildProgressCb(event, "Recalculating review queue"));
@@ -349,9 +360,99 @@ ipcMain.handle("app:deleteAllPayrollArchives", async () => handleSafe(async () =
     return { ...result, state: db.getState() };
 }));
 
-ipcMain.handle("app:upsertPolicy", (_event, policy) => handleSafe(() => { db.upsertPolicy(policy); return db.getState(); }));
-ipcMain.handle("app:deletePolicy", (_event, policyId) => handleSafe(() => { db.deletePolicy(policyId); return db.getState(); }));
-ipcMain.handle("app:bulkUpdatePolicy", (_event, payload) => handleSafe(() => { const result = db.bulkUpdatePolicy(payload); return { ...result, state: db.getState() }; }));
+ipcMain.handle("app:upsertPolicy", async (event, policy) => handleSafe(async () => {
+  const { generated, state } = await persistThenRecalculate(db, () => db.upsertPolicy(policy), buildProgressCb(event, "Updating Review Queue"));
+  return { generated, state };
+}));
+ipcMain.handle("app:deletePolicy", async (event, policyId) => handleSafe(async () => {
+  const { generated, state } = await persistThenRecalculate(db, () => db.deletePolicy(policyId), buildProgressCb(event, "Updating Review Queue"));
+  return { generated, state };
+}));
+ipcMain.handle("app:upsertAnnualPolicy", async (event, policy) => handleSafe(async () => {
+  const beforeState = db.getState();
+  const previous = policy?.id
+    ? beforeState.annualPolicies.find((row) => Number(row.id) === Number(policy.id))
+    : beforeState.annualPolicies.find((row) => String(row.item_name).trim().toLowerCase() === String(policy?.item_name || '').trim().toLowerCase()
+      && Number(row.financial_year) === Number(policy?.financial_year));
+  const saved = db.upsertAnnualPolicy(policy);
+  const changed = previous
+    ? String(previous.item_name).toLowerCase() !== String(saved.item_name).toLowerCase()
+      || Number(previous.financial_year) !== Number(saved.financial_year)
+      || Number(previous.allowed_quantity) !== Number(saved.allowed_quantity)
+      || String(previous.status || 'Active').toLowerCase() !== String(saved.status || 'Active').toLowerCase()
+    : Number(saved.allowed_quantity) > 0;
+  const generated = changed ? await db.recalculateReviews(buildProgressCb(event, "Updating Review Queue")) : 0;
+  return { generated, state: db.getState() };
+}));
+ipcMain.handle("app:bulkUpdateAnnualPolicies", async (event, payload) => handleSafe(async () => {
+  const result = db.bulkUpdateAnnualPolicies(payload);
+  const generated = result.recalculationRequired
+    ? await db.recalculateReviews(buildProgressCb(event, "Updating Review Queue"))
+    : 0;
+  return { ...result, generated, state: db.getState() };
+}));
+ipcMain.handle("app:createAnnualPolicyFromSuggestion", async (event, payload) => handleSafe(async () => {
+  const { generated, state } = await persistThenRecalculate(db,
+    () => db.createAnnualPolicyFromSuggestion(payload?.policy || {}, payload?.expected || {}),
+    buildProgressCb(event, "Updating Review Queue"));
+  return { generated, state };
+}));
+ipcMain.handle("app:deleteAnnualPolicy", async (event, policyId) => handleSafe(async () => {
+  const { generated, state } = await persistThenRecalculate(db, () => db.deleteAnnualPolicy(policyId), buildProgressCb(event, "Updating Review Queue"));
+  return { generated, state };
+}));
+ipcMain.handle("app:setReviewQueueCalculationMode", async (event, mode) => handleSafe(async () => {
+  const { generated, state } = await persistThenRecalculate(db, () => db.setReviewQueueCalculationMode(mode), buildProgressCb(event, "Updating Review Queue"));
+  return { generated, state };
+}));
+ipcMain.handle("app:bulkUpdatePolicy", async (event, payload) => handleSafe(async () =>
+  applyBulkPolicyChange(db, payload, buildProgressCb(event, "Updating Review Queue"))
+));
+ipcMain.handle("app:saveDetailedReportItemValues", async (event, payload) => handleSafe(async () => {
+  const result = db.saveDetailedReportItemValues(payload);
+  let generated = 0;
+  if (result.reviewCalculationsChanged) {
+    try {
+      generated = await db.recalculateReviews(buildProgressCb(event, "Updating Review Queue"));
+    } catch (error) {
+      throw new Error(`Item values were saved, but Review Queue recalculation failed: ${error.message || error}`);
+    }
+  }
+  return { ...result, generated, state: db.getState() };
+}));
+ipcMain.handle("app:getActualPriceData", () => handleSafe(() => db.getActualPriceData()));
+ipcMain.handle("app:chooseActualPriceImport", () => handleSafe(async () => {
+  const selection = await dialog.showOpenDialog({
+    title: "Import Actual Item Prices",
+    filters: [{ name: "Excel or CSV", extensions: ["xlsx", "xls", "csv"] }],
+    properties: ["openFile"],
+  });
+  if (selection.canceled || !selection.filePaths?.[0]) return { canceled: true };
+  const filePath = selection.filePaths[0];
+  const parsed = parseActualPriceFile(filePath);
+  return { canceled: false, fileName: path.basename(filePath), preview: db.previewActualItemPrices(parsed.rows) };
+}));
+ipcMain.handle("app:saveActualItemPrices", (_event, rows) => handleSafe(() => db.saveActualItemPrices(rows)));
+ipcMain.handle("app:exportActualPrices", async (event, kind) => {
+  try {
+    const data = db.getActualPriceData();
+    const template = kind === "template";
+    const headers = ["Item Name", "Actual Price"];
+    const rows = template ? data.items.map((item) => [item, ""]) : data.prices.map((price) => [price.item_name, Number(price.actual_price)]);
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showSaveDialog(window, {
+      title: template ? "Download Actual Price Template" : "Export Actual Item Prices",
+      defaultPath: template ? "actual-item-prices-template.xlsx" : "actual-item-prices.xlsx",
+      filters: [{ name: "Excel or CSV", extensions: ["xlsx", "csv"] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: true, data: { canceled: true } };
+    const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    sheet["!cols"] = [{ wch: 32 }, { wch: 18 }];
+    if (path.extname(result.filePath).toLowerCase() === ".csv") fs.writeFileSync(result.filePath, XLSX.utils.sheet_to_csv(sheet), "utf8");
+    else { const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, sheet, "Actual Prices"); XLSX.writeFile(workbook, result.filePath); }
+    return { ok: true, data: { canceled: false, filePath: result.filePath, rowCount: rows.length } };
+  } catch (error) { return { ok: false, error: error.message || "Could not export Actual Prices." }; }
+});
 ipcMain.handle("app:upsertItem", (_event, item) => handleSafe(() => { db.upsertItem(item); return db.getState(); }));
 ipcMain.handle("app:deleteItem", (_event, itemId) => handleSafe(() => { db.deleteItem(itemId); return db.getState(); }));
 ipcMain.handle("app:updateReview", (_event, action) => handleSafe(() => { db.updateReview(action); return db.getState(); }));
@@ -421,6 +522,8 @@ ipcMain.handle("app:exportDecisionRegisterPdf", async (event, config) => {
 // ROUTING HOOK FOR THE NEW REPORT
 ipcMain.handle("app:getAnalyticsData", async (_event, request) => handleSafe(() => {
     const { reportType, filters } = request;
+    if (reportType === 'detailed_report') return db.getDetailedDeductionReport(filters || {});
+    if (reportType === 'detailed_report_options') return db.getDetailedDeductionReportOptions();
     if (reportType === 'payroll_summary') return db.getPayrollSummaryAnalytics(filters);
     if (reportType === 'monthly') return db.getMonthlyAnalytics(filters);
     if (reportType === 'yearly') return db.getYearlyAnalytics(filters);

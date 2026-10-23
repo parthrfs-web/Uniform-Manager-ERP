@@ -13,6 +13,14 @@
 
 * { box-sizing: border-box; }
 
+.detailed-report-table-wrap { max-width: 100%; overflow: auto; max-height: 68vh; }
+.detailed-report-table { border-collapse: separate; border-spacing: 0; min-width: max-content; }
+.detailed-report-table th, .detailed-report-table td { min-width: 82px; white-space: nowrap; }
+.detailed-report-table th:nth-child(4), .detailed-report-table td:nth-child(4) { min-width: 190px; }
+.detailed-report-table .detailed-report-title { text-align: left; font-size: 18px; padding: 14px; background: var(--panel); }
+.detailed-report-table .detailed-report-meta th { background: #131922; color: var(--muted); font-weight: 500; }
+.detailed-report-table .number-cell { text-align: right; font-variant-numeric: tabular-nums; }
+
 html {
   height: 100%;
   overflow: hidden;
@@ -283,6 +291,8 @@ button:disabled { cursor: wait; opacity: 0.72; }
   overflow: auto;
   max-width: 100%;
 }
+.actual-price-table-scroll { max-height: 420px; overflow-y: auto; }
+.actual-price-table-scroll th { position: sticky; top: 0; z-index: 2; }
 table { width: 100%; border-collapse: collapse; background: #131922; }
 th, td { padding: 11px 12px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
 th { background: #1e2733; color: #b9c4cf; font-size: 12px; text-transform: uppercase; }
@@ -448,6 +458,18 @@ td.reason { white-space: normal; min-width: 240px; }
   grid-template-columns: minmax(240px, 320px) 1fr;
   gap: 18px;
 }
+.entitlement-section { margin-bottom: 18px; }
+.review-mode-panel { width: 100%; }
+.review-mode-panel .policy-form { grid-template-columns: minmax(240px, 420px) auto minmax(180px, 1fr); align-items: center; margin-bottom: 0; }
+.review-mode-status { color: var(--muted); }
+.unit-policy-editor .panel-heading { padding-top: 0; }
+.unit-policy-editor .policy-form { margin-bottom: 0; }
+.annual-bulk-editor { display: grid; gap: 10px; margin: 16px 0; }
+.annual-bulk-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.annual-bulk-toolbar label { color: var(--muted); font-weight: 600; }
+.annual-bulk-toolbar select { min-width: 145px; }
+.annual-bulk-editor table input { width: 130px; }
+.annual-bulk-editor [role="alert"] { color: var(--red); white-space: pre-line; }
 .policy-units-panel {
   align-self: start;
 }
@@ -672,4 +694,8 @@ td.reason { white-space: normal; min-width: 240px; }
   .stats, .mini-stats { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
   .policy-form, .item-form, .recovery-form, .two-col, .candidate-grid, .employee-form-grid { grid-template-columns: 1fr; }
   .primary-filters { flex-direction: column; align-items: stretch; }
+}
+@media (max-width: 720px) {
+  .annual-bulk-toolbar { align-items: stretch; }
+  .annual-bulk-toolbar > * { flex: 1 1 100%; }
 }

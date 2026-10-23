@@ -36,8 +36,8 @@ function isIgnoredIssueItemName(value) {
 
 function classifyReviewReason(reason) {
   const text = normalizeLabel(reason);
-  if (text.includes("entitlement exceeded")) return "Excess Entitlement";
-  if (text.includes("no entitlement policy")) return "Missing Policy";
+  if (text.includes("entitlement exceeded") || text.includes("combined annual and unit entitlement")) return "Excess Entitlement";
+  if (text.includes("no entitlement policy") || text.includes("no annual entitlement policy")) return "Missing Policy";
   if (text.includes("incomplete")) return "Incomplete Employee Data";
   return "Other";
 }
@@ -63,6 +63,34 @@ const APP_SCHEMA = {
     "item_name TEXT NOT NULL",
     "yearly_entitlement INTEGER NOT NULL DEFAULT 0",
     "item_cost REAL NOT NULL DEFAULT 0"
+  ],
+  annual_policies: [
+    "id INTEGER PRIMARY KEY AUTOINCREMENT",
+    "item_name TEXT NOT NULL",
+    "financial_year INTEGER NOT NULL",
+    "allowed_quantity INTEGER NOT NULL DEFAULT 0",
+    "status TEXT DEFAULT 'Active'",
+    "created_at TEXT",
+    "updated_at TEXT"
+  ],
+  actual_item_prices: [
+    "item_name TEXT PRIMARY KEY COLLATE NOCASE",
+    "actual_price REAL NOT NULL CHECK(actual_price >= 0)",
+    "created_at TEXT NOT NULL",
+    "updated_at TEXT NOT NULL"
+  ],
+  app_settings: [
+    "setting_key TEXT PRIMARY KEY",
+    "setting_value TEXT NOT NULL",
+    "updated_at TEXT NOT NULL"
+  ],
+  entitlement_classification_history: [
+    "id INTEGER PRIMARY KEY AUTOINCREMENT",
+    "uniform_issue_id INTEGER NOT NULL",
+    "calculation_mode TEXT NOT NULL",
+    "entitlement_consumed REAL NOT NULL DEFAULT 0",
+    "excess_generated REAL NOT NULL DEFAULT 0",
+    "recorded_at TEXT NOT NULL"
   ],
   uniform_items: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -102,6 +130,7 @@ const APP_SCHEMA = {
     "failed_count INTEGER DEFAULT 0",
     "duplicate_count INTEGER DEFAULT 0",
     "validation_errors TEXT",
+    "detected_items TEXT NOT NULL DEFAULT '[]'",
     "generated_reviews INTEGER DEFAULT 0",
     "duration_ms INTEGER DEFAULT 0",
     "status TEXT DEFAULT 'Completed'"
@@ -121,7 +150,9 @@ const APP_SCHEMA = {
     "remarks TEXT",
     "source_sheet TEXT NOT NULL",
     "source_row INTEGER NOT NULL",
-    "issued_at TEXT NOT NULL"
+    "issued_at TEXT NOT NULL",
+    "entitlement_consumed REAL NOT NULL DEFAULT 0",
+    "excess_generated REAL NOT NULL DEFAULT 0"
   ],
   review_queue: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -162,6 +193,23 @@ const APP_SCHEMA = {
     "waived_quantity REAL NOT NULL DEFAULT 0",
     "held_quantity REAL NOT NULL DEFAULT 0",
     "FOREIGN KEY(review_queue_id) REFERENCES review_queue(id) ON DELETE CASCADE"
+  ],
+  review_hold_events: [
+    "id INTEGER PRIMARY KEY AUTOINCREMENT",
+    "review_queue_item_id INTEGER NOT NULL",
+    "review_id INTEGER NOT NULL",
+    "uniform_issue_id INTEGER",
+    "employee_code TEXT NOT NULL",
+    "item_name TEXT NOT NULL",
+    "event_type TEXT NOT NULL",
+    "quantity REAL NOT NULL DEFAULT 0",
+    "decision TEXT",
+    "reason TEXT",
+    "actor TEXT",
+    "related_event_id INTEGER",
+    "due_month INTEGER",
+    "due_year INTEGER",
+    "created_at TEXT NOT NULL"
   ],
   payroll_batches: [
     "id INTEGER PRIMARY KEY AUTOINCREMENT",
@@ -382,6 +430,55 @@ async function createDatabase(userDataPath) {
       }
 
       db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_unit_item ON unit_policies(unit, item_name)");
+      db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_annual_policy_item_fy ON annual_policies(lower(item_name), financial_year)");
+      db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_actual_item_price_name ON actual_item_prices(lower(item_name))");
+      // Keep independent Actual Price rows for every detected catalog item.
+      // INSERT OR IGNORE preserves any previously configured value.
+      const detectedPriceItems = `
+        SELECT TRIM(item_name) AS item_name FROM uniform_items
+        UNION SELECT TRIM(item_name) AS item_name FROM uniform_issues
+        UNION SELECT TRIM(item_name) AS item_name FROM unit_policies
+        UNION SELECT TRIM(item_name) AS item_name FROM annual_policies
+      `;
+      db.run(`INSERT OR IGNORE INTO actual_item_prices (item_name, actual_price, created_at, updated_at)
+        SELECT MIN(item_name), 0, '${now().replace(/'/g, "''")}', '${now().replace(/'/g, "''")}'
+        FROM (${detectedPriceItems})
+        WHERE TRIM(COALESCE(item_name, '')) <> ''
+        GROUP BY lower(TRIM(item_name))`);
+      // New item master, issue-import, or policy records receive a zero default
+      // unless a price already exists for that item (including case variants).
+      for (const [triggerName, tableName] of [
+        ['actual_price_default_uniform_item', 'uniform_items'],
+        ['actual_price_default_uniform_issue', 'uniform_issues'],
+        ['actual_price_default_unit_policy', 'unit_policies'],
+        ['actual_price_default_annual_policy', 'annual_policies'],
+      ]) {
+        db.run(`CREATE TRIGGER IF NOT EXISTS ${triggerName} AFTER INSERT ON ${tableName}
+          WHEN TRIM(COALESCE(NEW.item_name, '')) <> ''
+          BEGIN
+            INSERT OR IGNORE INTO actual_item_prices (item_name, actual_price, created_at, updated_at)
+            VALUES (TRIM(NEW.item_name), 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+          END`);
+      }
+      db.run("CREATE INDEX IF NOT EXISTS idx_review_hold_child ON review_hold_events(review_queue_item_id, id)");
+      db.run("CREATE INDEX IF NOT EXISTS idx_review_hold_issue ON review_hold_events(uniform_issue_id, id)");
+      db.run("CREATE INDEX IF NOT EXISTS idx_review_hold_due ON review_hold_events(event_type, due_year, due_month)");
+
+      const legacyHeldRows = all(`SELECT rqi.*, rq.id AS parent_review_id,
+          NOT EXISTS (SELECT 1 FROM review_hold_events h WHERE h.review_queue_item_id = rqi.id AND h.event_type IN ('Held', 'Held Again')) AS needs_hold_event
+        FROM review_queue_items rqi JOIN review_queue rq ON rq.id = rqi.review_queue_id
+        WHERE COALESCE(rqi.is_active, 1) = 1 AND COALESCE(rqi.held_quantity, 0) > 0`)
+        .filter((row) => Number(row.needs_hold_event) === 1);
+      for (const row of legacyHeldRows) {
+        const heldAt = row.reviewed_at || row.created_at || now();
+        const parsed = new Date(heldAt);
+        const dueBase = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+        const dueDate = new Date(dueBase.getFullYear(), dueBase.getMonth() + 1, 1);
+        db.run(`INSERT INTO review_hold_events
+          (review_queue_item_id, review_id, uniform_issue_id, employee_code, item_name, event_type, quantity, reason, actor, due_month, due_year, created_at)
+          VALUES (?, ?, ?, ?, ?, 'Held', ?, ?, ?, ?, ?, ?)`,
+          [row.id, row.review_queue_id, row.uniform_issue_id, row.employee_code, row.item_name, Number(row.held_quantity), row.remarks || 'Migrated existing hold', row.reviewed_by || 'System Migration', dueDate.getMonth() + 1, dueDate.getFullYear(), heldAt]);
+      }
       db.run("COMMIT");
     } catch (error) {
       db.run("ROLLBACK");
@@ -663,6 +760,8 @@ async function createDatabase(userDataPath) {
 
   const employeeModule = createEmployees(moduleContext);
   const reviewModule = createReviews(moduleContext);
+  moduleContext.reopenDueHeldReviews = reviewModule.reopenDueHeldReviews;
+  reviewModule.reopenDueHeldReviews();
   const importModule = createImports(moduleContext);
   const policyModule = createPolicies(moduleContext);
   const inventoryModule = createInventory(moduleContext);

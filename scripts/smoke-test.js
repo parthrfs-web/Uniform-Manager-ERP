@@ -113,23 +113,21 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
   XLSX.writeFile(policyWorkbook, policyWorkbookPath);
   const policyDb = await createDatabase(fs.mkdtempSync(path.join(os.tmpdir(), "uniform-manager-policy-")));
   importWorkbook(policyWorkbookPath, policyDb);
+  policyDb.upsertItem({ item_code: "HELMET-RED-TEST", item_name: "Helmet Red", category: "Uniform", size: "Standard", cost: 0 });
   let policyState = policyDb.getState();
   const defaultPolicy = policyState.policies.find((row) => row.unit === "NEW TEST UNIT" && row.item_name === "Helmet Red");
   if (!defaultPolicy || Number(defaultPolicy.yearly_entitlement) !== 0) {
     throw new Error("Import did not auto-create default unit/item policy with allowed qty 0.");
   }
-  if (policyState.missingPolicySuggestions.some((row) => row.unit === "NEW TEST UNIT" && row.item_name === "Helmet Red")) {
-    throw new Error("Auto-created policy should prevent missing-policy suggestions for imported unit/item.");
+  if (!policyState.annualPolicies.some((row) => row.item_name === "Helmet Red" && Number(row.financial_year) === 2025 && Number(row.allowed_quantity) === 0)) {
+    throw new Error("Imported item did not receive its default annual item policy for the applicable financial year.");
   }
   if (!policyState.reviews.some((row) => row.unit === "NEW TEST UNIT" && row.item_name === "Helmet Red" && Number(row.allowed_qty) === 0)) {
     throw new Error("Auto-created default policy did not produce allowed-0 entitlement review.");
   }
-  policyDb.upsertPolicy({
-    unit: "NEW TEST UNIT",
-    item_name: "Helmet Red",
-    yearly_entitlement: 1,
-    item_cost: 250,
-  });
+  policyDb.upsertAnnualPolicy({ item_name: "Helmet Red", financial_year: 2025, allowed_quantity: 0 });
+  policyDb.recalculateReviews();
+  policyDb.upsertAnnualPolicy({ item_name: "Helmet Red", financial_year: 2025, allowed_quantity: 1 });
   const regeneratedReviews = policyDb.recalculateReviews();
   policyState = policyDb.getState();
   if (regeneratedReviews !== 0) {
@@ -396,6 +394,7 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
   importWorkbook(shiftWorkbookPath, shiftDb);
   shiftDb.upsertPolicy({ unit: "Reliance", item_name: "Shirt", yearly_entitlement: 2, item_cost: 100 });
   shiftDb.upsertPolicy({ unit: "AMNS", item_name: "Shirt", yearly_entitlement: 3, item_cost: 100 });
+  shiftDb.upsertAnnualPolicy({ item_name: "Shirt", financial_year: 2025, allowed_quantity: 5 });
   shiftDb.recalculateReviews();
   const shiftState = shiftDb.getState();
   if (shiftState.reviews.some((row) => row.employee_code === "S001" && row.item_name === "Shirt" && row.status === "Pending")) {
@@ -413,6 +412,8 @@ const { importWorkbook, inspectWorkbook } = require("../src/main/import/smart-im
   XLSX.writeFile(perItemReviewWorkbook, perItemReviewPath);
   const perItemDb = await createDatabase(fs.mkdtempSync(path.join(os.tmpdir(), "uniform-manager-per-item-review-")));
   importWorkbook(perItemReviewPath, perItemDb);
+  for (const item_name of ["Pant", "Shirt", "Whistle", "Reflector"]) perItemDb.upsertAnnualPolicy({ item_name, financial_year: 2025, allowed_quantity: 0 });
+  perItemDb.recalculateReviews();
   const perItemReviews = perItemDb.getState({ distributionLimit: 1000 }).reviews.filter((row) => row.employee_code === "PI001");
   const janReviews = perItemReviews.filter((row) => row.issue_month === 1 && row.issue_year === 2026);
   const expectedJanReviews = { Pant: 2, Shirt: 2, Whistle: 2, Reflector: 10 };

@@ -283,13 +283,15 @@ function detectColumns(headers, warnings) {
     const name = normalizeString(header);
     if (!name || name.length < 2 || isMetaCol(name)) return;
     
-    const compactName = compact(name);
-    if (duplicateCheck.has(compactName)) {
+    // Normalize case and whitespace for duplicate detection, but preserve punctuation
+    // so genuinely distinct item labels are not collapsed into one column.
+    const duplicateKey = normalizeHeader(name);
+    if (duplicateCheck.has(duplicateKey)) {
         warnings.push(`Duplicate item header detected and ignored: ${name}`);
         return;
     }
     
-    duplicateCheck.add(compactName);
+    duplicateCheck.add(duplicateKey);
     colMap.itemCols.push({ idx, name });
   });
 
@@ -571,6 +573,7 @@ function buildParsedImport(filePath, candidate) {
     inserted: 0,
     updated: 0,
     skipped: candidate.parsed?.skipped || 0,
+    detectedItems: [...new Set((candidate.itemColumns || []).map((column) => normalizeString(column.itemName)).filter(Boolean))],
     expectedMetrics: candidate.parsed?.expectedMetrics || {}
   };
 
@@ -789,6 +792,7 @@ function importWorkbook(filePath, db) {
   }
 
   if (summary.importHash && typeof db.hasImportHash === "function" && db.hasImportHash(summary.importHash)) {
+    if (typeof db.syncDuplicateImportDetectedItems === 'function') db.syncDuplicateImportDetectedItems(summary.importHash, summary.detectedItems || []);
     return { ...summary, duplicate: true, inserted: 0, updated: 0, skipped: summary.totalWorksheetRows || summary.totalRows || 0 };
   }
 

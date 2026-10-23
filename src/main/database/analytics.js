@@ -158,6 +158,222 @@ module.exports = ({ db, scalar, all }) => {
     }
 
     return {
+        getDetailedDeductionReportOptions() {
+            const source = `
+                SELECT DISTINCT
+                    CASE WHEN COALESCE(ui.issue_month, rq.issue_month) >= 4 THEN COALESCE(ui.issue_year, rq.issue_year)
+                         ELSE COALESCE(ui.issue_year, rq.issue_year) - 1 END AS financial_year,
+                    COALESCE(ui.issue_month, rq.issue_month) AS distribution_month,
+                    COALESCE(rq.unit, e.unit, '') AS unit,
+                    substr(dm.recorded_at, 1, 7) AS deduction_record_month
+                FROM review_queue_items rqi
+                JOIN review_queue rq ON rq.id = rqi.review_queue_id
+                LEFT JOIN uniform_issues ui ON ui.id = rqi.uniform_issue_id
+                LEFT JOIN employees e ON e.employee_code = rqi.employee_code
+                JOIN (
+                    SELECT review_id, MAX(created_at) AS recorded_at
+                    FROM salary_deductions WHERE COALESCE(is_active, 1) = 1 GROUP BY review_id
+                ) dm ON dm.review_id = rq.id
+                WHERE COALESCE(rqi.is_active, 1) = 1 AND COALESCE(rqi.deducted_quantity, 0) > 0`;
+            const rows = all(source);
+            return {
+                financialYears: [...new Set(rows.map((row) => Number(row.financial_year)).filter((year) => Number.isInteger(year) && year > 1900))].sort((a, b) => b - a),
+                distributionMonths: [...new Set(rows.map((row) => Number(row.distribution_month)).filter((month) => Number.isInteger(month) && month >= 1 && month <= 12))].sort((a, b) => a - b),
+                deductionMonths: [...new Set(rows.map((row) => row.deduction_record_month).filter(Boolean))].sort().reverse(),
+                units: [...new Set(rows.map((row) => String(row.unit || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+            };
+        },
+
+        getDetailedDeductionReport(filters = {}) {
+            const where = ["COALESCE(rqi.is_active, 1) = 1", "COALESCE(rqi.deducted_quantity, 0) > 0"];
+            const params = [];
+            const financialYear = filters.financialYear === '' || filters.financialYear === undefined ? null : Number(filters.financialYear);
+            const distributionMonth = filters.distributionMonth === '' || filters.distributionMonth === undefined ? null : Number(filters.distributionMonth);
+            if (financialYear !== null && Number.isInteger(financialYear)) {
+                where.push("(CASE WHEN COALESCE(ui.issue_month, rq.issue_month) >= 4 THEN COALESCE(ui.issue_year, rq.issue_year) ELSE COALESCE(ui.issue_year, rq.issue_year) - 1 END) = ?");
+                params.push(financialYear);
+            }
+            if (distributionMonth !== null && Number.isInteger(distributionMonth)) {
+                where.push("CAST(COALESCE(ui.issue_month, rq.issue_month) AS INTEGER) = ?");
+                params.push(distributionMonth);
+            }
+            if (filters.deductionMonth) {
+                where.push("substr(dm.recorded_at, 1, 7) = ?");
+                params.push(String(filters.deductionMonth));
+            }
+            if (filters.unit) {
+                where.push("lower(COALESCE(rq.unit, e.unit, '')) = lower(?)");
+                params.push(String(filters.unit));
+            }
+            if (filters.employeeCode) {
+                where.push("lower(rqi.employee_code) LIKE lower(?)");
+                params.push(`%${String(filters.employeeCode).trim()}%`);
+            }
+            if (filters.employeeName) {
+                where.push("lower(COALESCE(e.employee_name, rq.employee_name, '')) LIKE lower(?)");
+                params.push(`%${String(filters.employeeName).trim()}%`);
+            }
+
+            const source = all(`
+                WITH item_rates AS (
+                    SELECT lower(TRIM(item_name)) AS item_key, MIN(cost) AS min_cost, MAX(cost) AS max_cost,
+                           COUNT(DISTINCT cost) AS cost_count
+                    FROM uniform_items GROUP BY lower(TRIM(item_name))
+                ), unit_limits AS (
+                    SELECT lower(TRIM(unit)) AS unit_key, lower(TRIM(item_name)) AS item_key,
+                           MAX(item_cost) AS item_cost, MAX(yearly_entitlement) AS yearly_entitlement
+                    FROM unit_policies GROUP BY lower(TRIM(unit)), lower(TRIM(item_name))
+                ), annual_limits AS (
+                    SELECT lower(TRIM(item_name)) AS item_key, CAST(financial_year AS INTEGER) AS financial_year,
+                           MAX(allowed_quantity) AS allowed_quantity
+                    FROM annual_policies WHERE lower(COALESCE(status, 'Active')) = 'active'
+                    GROUP BY lower(TRIM(item_name)), CAST(financial_year AS INTEGER)
+                ), deduction_months AS (
+                    SELECT review_id, MAX(created_at) AS recorded_at, MAX(status) AS status
+                    FROM salary_deductions WHERE COALESCE(is_active, 1) = 1 GROUP BY review_id
+                )
+                SELECT
+                    rq.id AS review_id,
+                    rqi.uniform_issue_id,
+                    rqi.employee_code,
+                    COALESCE(NULLIF(e.employee_name, ''), rq.employee_name, rqi.employee_code) AS employee_name,
+                    e.father_name,
+                    COALESCE(rq.unit, e.unit, '') AS unit,
+                    COALESCE(NULLIF(TRIM(ui.issue_period_label), ''), NULLIF(TRIM(rq.issue_period_label), ''),
+                        CASE WHEN COALESCE(ui.issue_month, rq.issue_month) IS NOT NULL AND COALESCE(ui.issue_year, rq.issue_year) IS NOT NULL
+                             THEN printf('%02d-%02d', COALESCE(ui.issue_month, rq.issue_month), COALESCE(ui.issue_year, rq.issue_year) % 100) ELSE '' END) AS for_month,
+                    COALESCE(ui.issue_month, rq.issue_month) AS issue_month,
+                    COALESCE(ui.issue_year, rq.issue_year) AS issue_year,
+                    CASE WHEN COALESCE(ui.issue_month, rq.issue_month) >= 4 THEN COALESCE(ui.issue_year, rq.issue_year)
+                         ELSE COALESCE(ui.issue_year, rq.issue_year) - 1 END AS financial_year,
+                    rqi.item_name,
+                    SUM(rqi.deducted_quantity) AS quantity,
+                    COALESCE(MAX(up.item_cost), MAX(rq.item_cost), MAX(itm.max_cost)) AS deduction_rate,
+                    MAX(aip.actual_price) AS actual_rate,
+                    MAX(up.yearly_entitlement) AS unit_max_supplied,
+                    MAX(ap.allowed_quantity) AS annual_max_supplied,
+                    MAX(dm.recorded_at) AS deduction_recorded_at,
+                    MAX(dm.status) AS deduction_record_status
+                FROM review_queue_items rqi
+                JOIN review_queue rq ON rq.id = rqi.review_queue_id
+                LEFT JOIN uniform_issues ui ON ui.id = rqi.uniform_issue_id
+                LEFT JOIN employees e ON e.employee_code = rqi.employee_code
+                LEFT JOIN item_rates itm ON itm.item_key = lower(TRIM(rqi.item_name))
+                LEFT JOIN actual_item_prices aip ON lower(TRIM(aip.item_name)) = lower(TRIM(rqi.item_name))
+                LEFT JOIN unit_limits up ON up.unit_key = lower(TRIM(COALESCE(rq.unit, e.unit, '')))
+                    AND up.item_key = lower(TRIM(rqi.item_name))
+                LEFT JOIN annual_limits ap ON ap.item_key = lower(TRIM(rqi.item_name))
+                    AND ap.financial_year = (CASE WHEN COALESCE(ui.issue_month, rq.issue_month) >= 4 THEN COALESCE(ui.issue_year, rq.issue_year)
+                         ELSE COALESCE(ui.issue_year, rq.issue_year) - 1 END)
+                JOIN deduction_months dm ON dm.review_id = rq.id
+                WHERE ${where.join(' AND ')}
+                GROUP BY rq.id, rqi.uniform_issue_id, rqi.employee_code, e.employee_name, e.father_name,
+                    COALESCE(rq.unit, e.unit, ''),
+                    COALESCE(NULLIF(TRIM(ui.issue_period_label), ''), NULLIF(TRIM(rq.issue_period_label), ''),
+                        CASE WHEN COALESCE(ui.issue_month, rq.issue_month) IS NOT NULL AND COALESCE(ui.issue_year, rq.issue_year) IS NOT NULL
+                             THEN printf('%02d-%02d', COALESCE(ui.issue_month, rq.issue_month), COALESCE(ui.issue_year, rq.issue_year) % 100) ELSE '' END),
+                    COALESCE(ui.issue_month, rq.issue_month), COALESCE(ui.issue_year, rq.issue_year), rqi.item_name
+                ORDER BY rqi.employee_code,
+                    CASE WHEN COALESCE(ui.issue_month, rq.issue_month) >= 4 THEN COALESCE(ui.issue_year, rq.issue_year) ELSE COALESCE(ui.issue_year, rq.issue_year) - 1 END,
+                    COALESCE(ui.issue_month, rq.issue_month), rq.unit, for_month, deduction_recorded_at, lower(rqi.item_name)
+            `, params);
+
+            const itemOrder = [...new Set(source.map((row) => String(row.item_name || '').trim()).filter(Boolean))]
+                .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+            const modeValue = scalar("SELECT setting_value FROM app_settings WHERE setting_key = 'review_queue_calculation_mode'");
+            const calculationMode = ['item_annual', 'unit_wise', 'combined'].includes(modeValue) ? modeValue : 'item_annual';
+            const itemContexts = new Map(itemOrder.map((item) => [item, new Map()]));
+            const rowsByKey = new Map();
+            source.forEach((record) => {
+                const deductionRecordMonth = record.deduction_recorded_at ? String(record.deduction_recorded_at).slice(0, 7) : '';
+                const key = [record.employee_code, record.unit, record.for_month, deductionRecordMonth].join('|');
+                if (!rowsByKey.has(key)) rowsByKey.set(key, {
+                    employee_code: record.employee_code,
+                    employee_name: record.employee_name,
+                    father_name: record.father_name || '',
+                    unit: record.unit || '',
+                    for_month: record.for_month || '',
+                    financial_year: Number(record.financial_year || 0) || null,
+                    distribution_month: Number(record.issue_month || 0) || null,
+                    deduction_record_month: deductionRecordMonth,
+                    deduction_record_status: record.deduction_record_status || '',
+                    items: {},
+                    total: 0,
+                });
+                const row = rowsByKey.get(key);
+                const qty = Number(record.quantity || 0);
+                const rate = record.deduction_rate === null || record.deduction_rate === undefined ? null : Number(record.deduction_rate);
+                row.items[record.item_name] = Number(row.items[record.item_name] || 0) + qty;
+                if (rate !== null && Number.isFinite(rate)) row.total += qty * rate;
+
+                const contexts = itemContexts.get(record.item_name);
+                const contextKey = `${record.unit}|${record.financial_year}`;
+                if (!contexts.has(contextKey)) contexts.set(contextKey, {
+                    unit: record.unit || '',
+                    annual: record.annual_max_supplied === null ? null : Number(record.annual_max_supplied),
+                    unitLimit: record.unit_max_supplied === null ? null : Number(record.unit_max_supplied),
+                    deductionRate: rate,
+                    actualRate: record.actual_rate === null ? null : record.actual_rate,
+                });
+            });
+
+            const unavailable = 'N/A';
+            const displayValues = (values) => {
+                const normalized = [...new Set(values.map((value) => {
+                    if (value === null || value === undefined || value === '') return unavailable;
+                    if (typeof value === 'string' && !Number.isFinite(Number(value))) return value;
+                    return Number.isFinite(Number(value)) ? String(Number(value)) : unavailable;
+                }))];
+                if (!normalized.length) return unavailable;
+                return normalized.length === 1 ? normalized[0] : 'Varies by unit';
+            };
+            const itemInfo = itemOrder.map((item) => {
+                const contexts = [...itemContexts.get(item).values()];
+                const limitValues = contexts.map((context) => calculationMode === 'item_annual'
+                    ? context.annual
+                    : calculationMode === 'unit_wise'
+                        ? context.unitLimit
+                        : `Annual: ${context.annual ?? unavailable} / Unit: ${context.unitLimit ?? unavailable}`);
+                const limitDisplay = calculationMode === 'combined'
+                    ? ([...new Set(limitValues)].length > 1 ? 'Varies by unit' : (limitValues[0] || unavailable))
+                    : displayValues(limitValues);
+                return {
+                    item,
+                    max_supplied_pa: limitDisplay,
+                    deduction_rate: displayValues(contexts.map((context) => context.deductionRate)),
+                    actual_rate: displayValues(contexts.map((context) => context.actualRate)),
+                    actual_price: displayValues(contexts.map((context) => context.actualRate)),
+                    contexts: contexts.map((context) => ({ unit: context.unit, annual_limit: context.annual, unit_limit: context.unitLimit, deduction_rate: context.deductionRate })),
+                };
+            });
+            const rows = [...rowsByKey.values()].map((row, index) => ({
+                sr: index + 1,
+                register_serial: null,
+                ...row,
+                deduction_month_display: row.deduction_record_month
+                    ? new Date(`${row.deduction_record_month}-01T00:00:00`).toLocaleString('en-US', { month: 'short', year: '2-digit' }).replace(' ', '-')
+                    : '',
+                items: Object.fromEntries(itemOrder.map((item) => [item, Number(row.items[item] || 0)])),
+                total: Number(row.total.toFixed(2)),
+            }));
+            const selectedDeductionMonth = String(filters.deductionMonth || '');
+            const reportTitle = selectedDeductionMonth
+                ? `Deductions ${new Date(`${selectedDeductionMonth}-01T00:00:00`).toLocaleString('en-US', { month: 'short', year: '2-digit' }).replace(' ', '-')}`
+                : rows.length && new Set(rows.map((row) => row.deduction_record_month).filter(Boolean)).size === 1
+                    ? `Deductions ${rows.find((row) => row.deduction_record_month)?.deduction_month_display}`
+                    : 'Detailed Deductions';
+            return {
+                reportTitle,
+                items: itemOrder,
+                itemInfo,
+                rows,
+                totalAmount: Number(rows.reduce((sum, row) => sum + row.total, 0).toFixed(2)),
+                calculationMode,
+                registerSerialAvailable: false,
+                actualPayrollMonthAvailable: false,
+            };
+        },
+
         // =========================================================
         // STRICT PAYROLL DEDUCTION SUMMARY
         // Retrieves exclusively DEDUCT records, grouping dynamically
